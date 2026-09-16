@@ -1,0 +1,22 @@
+# 路面種類辨識（來自 road_classification 專案：ResNet34，4 類）
+# 這一層決定後面要用哪個分級模型：Asphalt → asphalt.yaml、Concrete → cement.yaml；
+# Belgian Block / Forest Road 本來就不平整，不做分級，只顯示種類。
+
+model_dir: models/resnet                    # 需含 config.json（前處理參數）與 classes.txt
+hef: models/resnet/resnet_v1_34.hef
+
+# 類別名稱 → 分級模式。沒列在這裡的類別只顯示名稱、不畫網格
+grading:
+  "Asphalt Road": asphalt
+  "Concrete road": cement
+
+smooth_window: 5    # 平均最近 N 次推論的機率，減少結果閃爍（原專案設定）
+confirm_count: 3    # 新的路面種類要連續 N 次分析都勝出才切換分級模型（遲滯），
+                    # 避免在瀝青/水泥邊界或機率接近時來回切換造成網格閃爍、平滑器被重置。
+                    # 每次分析約 30~300 ms，N=3 大約延遲 0.1~1 秒。設 1 = 不遲滯
+
+# 路面 ROI：三個路面模型共用同一組，框過一次存這裡（0~1 比例），之後自動沿用。
+# 重框：執行時加 --ui
+roi_store: presets/roi.json
+roi_window_max_w: 1600   # 框選視窗的最大尺寸，畫面比螢幕大時等比例縮小顯示
+roi_window_max_h: 900

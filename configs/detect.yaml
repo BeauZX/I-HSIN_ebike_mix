@@ -1,0 +1,26 @@
+# 人車偵測 + 追蹤 + 警戒區（來自 OverlayView 專案）
+# YOLOv8n 吃鏡頭的 lores 串流（由 ISP 直接縮成模型輸入尺寸，不耗 CPU），整張畫面偵測。
+
+hef: models/yolov8n.hef
+conf: 0.4                 # 偵測信心門檻
+
+# COCO 類別：只保留人與道路車輛
+classes:
+  0: person
+  1: bicycle
+  2: car
+  3: motorcycle
+  5: bus
+  7: truck
+
+tracker:
+  assoc_dist_px: 160      # 偵測與既有軌跡的最大配對距離（像素）
+  max_miss: 4             # 連續幾幀沒配到就刪掉軌跡
+
+prediction_horizon_sec: 2.0   # 預測點：依目前速度往前推幾秒
+alert_cooldown_sec: 1.5       # 警報最短間隔，避免每幀連續響
+
+# 警戒區：第一次執行（或加 --ui）會跳視窗框一次，存到這裡（0~1 比例）之後自動沿用；
+# 執行中也可在主視窗用滑鼠左鍵拖曳重設，放開即存
+zone_store: presets/warning_zone.json
+default_zone: [0.27, 0.28, 0.73, 0.90]   # 框選時按 C 取消、且沒存過時用的預設（x1, y1, x2, y2，0~1 比例）

@@ -1,0 +1,121 @@
+{
+  "architecture": "resnet34",
+  "num_classes": 4,
+  "classes": [
+    "Asphalt Road",
+    "Belgian Block",
+    "Concrete road",
+    "Forest Road"
+  ],
+  "class_to_idx": {
+    "Asphalt Road": 0,
+    "Belgian Block": 1,
+    "Concrete road": 2,
+    "Forest Road": 3
+  },
+  "image_size": 224,
+  "mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "pretrained_cfg": {
+    "input_size": [
+      3,
+      224,
+      224
+    ],
+    "interpolation": "bicubic",
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "crop_pct": 0.95,
+    "crop_mode": "center"
+  },
+  "data_dir": "C:\\Users\\user\\Desktop\\test\\datasets\\pavement_v10_clean",
+  "validation_dir": "valid",
+  "training": {
+    "architecture": "resnet34",
+    "num_classes": 4,
+    "classes": [
+      "Asphalt Road",
+      "Belgian Block",
+      "Concrete road",
+      "Forest Road"
+    ],
+    "class_to_idx": {
+      "Asphalt Road": 0,
+      "Belgian Block": 1,
+      "Concrete road": 2,
+      "Forest Road": 3
+    },
+    "image_size": 224,
+    "epochs": 80,
+    "freeze_epochs": 5,
+    "batch_size": 128,
+    "head_lr": 0.001,
+    "fine_tune_lr": 0.0001,
+    "weight_decay": 0.0001,
+    "seed": 42,
+    "pretrained": true,
+    "amp_enabled": true,
+    "device_type": "cuda",
+    "workers": 4,
+    "persistent_workers": false,
+    "class_weighted_loss": false,
+    "early_stopping_patience": 10,
+    "early_stopping_min_delta": 0.0001,
+    "optimizer": "AdamW",
+    "optimizer_defaults": {
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "eps": 1e-08,
+      "amsgrad": false
+    },
+    "scheduler": "CosineAnnealingLR",
+    "scheduler_eta_min": 0.0,
+    "software_versions": {
+      "torch": "2.9.0+cu128",
+      "torchvision": "0.24.0+cu128",
+      "timm": "1.0.28"
+    },
+    "train_size": 1752,
+    "val_size": 359,
+    "dataset_signature": "a073dcec7c0a04b2a6d075c0bc50356c5e7d5da0a1178d4a0af99f47f4503948",
+    "transform": {
+      "input_size": [
+        3,
+        224,
+        224
+      ],
+      "interpolation": "bicubic",
+      "mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "crop_pct": 0.95,
+      "crop_mode": "center",
+      "train_augmentation": "center_translation_v2+hflip+color_jitter"
+    }
+  }
+}

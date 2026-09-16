@@ -1,0 +1,28 @@
+# 水泥路面破碎辨識（來自 cement 專案）：YOLO-cls 網格分級 × 影像法裂縫定位 融合
+# 路面種類判為 Concrete road 時啟用。
+
+hef: models/cement_cls.hef
+class_names: [dry_concrete_severe, dry_concrete_slight, dry_concrete_smooth]
+
+grid:
+  rows: 3             # 原專案是 4×10，整合後與 asphalt 統一為 3×5
+  cols: 5
+
+# 影像法裂縫偵測參數檔（純 CPU，整個 ROI 跑一次約 250 ms，是水泥模式的速度瓶頸）
+crack_preset: presets/rough.json     # rough.json（粗糙路面）或 smooth.json（平整路面）
+
+# 融合參數
+fusion:
+  w_yolo: 0.6                 # YOLO 語意權重
+  w_crack: 0.4                # 裂縫密度權重
+  crack_ratio_norm: 0.06      # 格內裂縫像素比達此值 → 裂縫項視為滿分
+  t_slight: 0.30              # 嚴重度分級門檻
+  t_severe: 0.60
+  smooth_gate_min_score: 0.55 # YOLO 判為 smooth 的格子，裂縫 score 需 ≥ 此值才採信
+
+# 時序平滑：pid（逐級緩衝，不跨級跳變）或 ema（單純 EMA + 遲滯）
+smoother: pid
+pid_params: presets/pid.json  # kp / ki / kd / min_dwell / switch_margin（cement 專案調好的值）
+ema:
+  alpha: 0.45
+  switch_margin: 0.08

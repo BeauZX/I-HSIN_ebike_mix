@@ -1,0 +1,17 @@
+# 鏡頭設定（IMX219 Stereo Camera，經 Picamera2 讀取）
+# 曝光組合沿用 asphalt 專案在 rpicam-vid 上實測過的設定，這裡改以 libcamera control 指定，效果相同。
+
+index: 0            # 用哪顆鏡頭（rpicam-hello --list-cameras 的編號）。立體板兩顆朝同一方向，先只用 cam0
+width: 1280
+height: 720
+fps: 25             # 實測值：Pi 5 上 720p 邊錄邊分析大約就是這個上限
+rotation: 180       # 0 或 180。鏡頭倒裝時設 180，由 ISP 翻轉（hflip+vflip），不耗 CPU
+                    # 改了這個要加 --ui 重新框選路面 ROI 與警戒區
+
+exposure: normal    # 對應 rpicam-vid --exposure：
+                    #   normal = 預設自動曝光
+                    #   sport  = 短曝光大增益，減少動態模糊（車速快、路面紋理被拖糊時改這個）
+                    #   long   = 長曝光，暗處乾淨但容易動態模糊
+awb: auto           # 對應 --awb。固定色溫會放大感光元件本身的色差，auto 實測反而更準
+denoise: cdn_off    # 對應 --denoise：off / cdn_off（關彩色降噪、保留路面細紋理）/ cdn_fast / cdn_hq / auto
+warmup: 1.0         # 啟動後等待曝光穩定的秒數

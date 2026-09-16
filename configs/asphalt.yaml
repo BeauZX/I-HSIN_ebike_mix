@@ -1,0 +1,13 @@
+# 瀝青路面劣化分級（來自 asphalt 專案）
+# 路面種類判為 Asphalt Road 時啟用：把路面 ROI 切成網格，逐格分 severe / slight / smooth。
+
+hef: models/asphalt_cls.hef
+# HEF 裡沒有類別名稱，順序必須跟訓練時一致（字母序）
+class_names: [dry_asphalt_severe, dry_asphalt_slight, dry_asphalt_smooth]
+
+grid:
+  rows: 3
+  cols: 5
+
+ema_alpha: 0.45       # 時序平滑係數 (0~1)，越小越平滑、反應越慢
+switch_margin: 0.1    # 切換類別所需的機率優勢，避免在邊界反覆跳動

@@ -1,0 +1,20 @@
+[project]
+name = "system-integration"
+version = "0.1.0"
+description = "路面辨識整合：路面種類（ResNet）→ 瀝青/水泥劣化分級 + 人車偵測警戒，Raspberry Pi 5 + Hailo-8"
+readme = "README.md"
+# 3.13 是因為 Hailo 的 Python binding（apt 的 python3-hailort）與 picamera2 只有系統 Python 3.13 的版本
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=1.26.0",
+    "opencv-python>=4.9.0",
+    "pyyaml>=6.0",
+]
+# hailo_platform 與 picamera2 不在 PyPI 上，走系統套件（venv 需 --system-site-packages）。
+# 只跑 Hailo，不裝 torch / ultralytics（原專案的 .pt CPU 備援不納入）。
+
+[tool.uv]
+# 一定要用系統的 /usr/bin/python3.13，不能讓 uv 自己下載一份：
+# venv 要靠 --system-site-packages 借用系統的 hailo_platform / picamera2，
+# uv 下載的 Python 看不到系統的 dist-packages
+python-preference = "only-system"

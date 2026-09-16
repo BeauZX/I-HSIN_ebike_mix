@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# HailoRT 每次執行都會在工作目錄寫這個
+hailort.log
+
+# 錄影輸出
+outputs/
+
+# 現場框選的結果（每台車/每次安裝不同）
+presets/roi.json
+presets/warning_zone.json

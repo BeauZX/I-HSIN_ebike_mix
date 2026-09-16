@@ -1,0 +1,7 @@
+{
+  "kp": 0.35,
+  "ki": 0.03,
+  "kd": 0.08,
+  "min_dwell": 6,
+  "switch_margin": 0.08
+}

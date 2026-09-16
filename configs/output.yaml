@@ -1,0 +1,9 @@
+# 畫面與錄影
+
+dir: outputs            # 錄影輸出資料夾
+segment_seconds: 60     # 每幾秒切一段；檔名為開始時間 YYYYMMDD_HHMMSS.mp4
+fps: 25                 # 錄影檔幀率。依牆上時鐘補幀/丟幀，處理變慢時播放速度仍與真實時間一致
+codec: mp4v             # OpenCV 這裡沒有 H.264，只有 mp4v / XVID / MJPG 開得起來
+
+# 視窗標題必須是 ASCII（OpenCV 5 的 Qt 後端用名稱查視窗，中文會找不到而崩潰）
+window_title: "Road Integration (q=quit | drag=warning zone | r=reset tracks)"
