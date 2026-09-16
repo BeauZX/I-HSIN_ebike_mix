@@ -11,6 +11,7 @@
     uv run main.py                 沿用上次框的路面 ROI 與警戒區，開視窗、錄影
     uv run main.py --ui            重新框選路面 ROI 與警戒區（鏡頭位置動過時）
     uv run main.py --no-save       只顯示不錄影
+    uv run main.py --metrics       同時取樣功耗 / 頻率 / 降頻 / 各階段耗時（見 src/metrics.py，configs/metrics.yaml）
 
 視窗操作：q 結束、滑鼠左鍵拖曳 = 設定警戒區（放開即存檔）、r 重設追蹤。
 參數在 configs/ 底下，一個專案一個檔（camera / road_type / asphalt / cement / detect / output）。
@@ -22,6 +23,7 @@
 """
 
 import argparse
+import os
 import signal
 import sys
 import time
@@ -52,6 +54,8 @@ def main() -> None:
     parser.add_argument("--ui", action="store_true",
                         help="重新框選路面 ROI 與警戒區（不沿用 presets/roi.json、warning_zone.json）")
     parser.add_argument("--no-save", action="store_true", help="只顯示不錄影")
+    parser.add_argument("--metrics", action="store_true",
+                        help="取樣功耗 / 頻率 / 降頻 / 各階段耗時到 CSV（metrics.yaml 的 enabled 為 false 時臨時打開）")
     parser.add_argument("--configs", default=None, help="設定資料夾（預設 configs/）")
     args = parser.parse_args()
 
@@ -60,6 +64,10 @@ def main() -> None:
     except SettingsError as e:
         print(f"設定錯誤: {e}", file=sys.stderr)
         sys.exit(1)
+    metrics_on = cfg.metrics.enabled or args.metrics
+    if metrics_on:
+        # HailoRT 的 scheduler 只在建 VDevice 時看這個變數；有它 `hailortcli monitor` 才拿得到使用率
+        os.environ.setdefault("HAILO_MONITOR", "1")
 
     # 模型與硬體相關的模組放在設定檢查通過之後才 import，設定寫錯時能馬上得到回饋
     from src.analyzer import RoadAnalyzer
@@ -67,6 +75,7 @@ def main() -> None:
     from src.detect import DetectorThread, HailoDetector, OverlayRenderer, WarningZone
     from src.grading.graders import AsphaltGrader, CementGrader
     from src.hailo import HailoDevice
+    from src.metrics import MetricsRecorder
     from src.recorder import SegmentRecorder
     from src.road_type import RoadTypeClassifier
     from src.roi import camera_key, resolve_roi
@@ -80,6 +89,8 @@ def main() -> None:
     cam = None
     road = det = None
     recorder = None
+    metrics = None
+    loop_ms = {"draw_ms": 0.0, "write_ms": 0.0, "show_ms": 0.0}    # 主緒每幀各段耗時，供 metrics 取樣
     frame_idx = 0
     interrupted = False
     t_start = time.perf_counter()
@@ -135,6 +146,33 @@ def main() -> None:
         fps_shown = 0.0
         t_start = last_t = time.perf_counter()
         last_n = 0
+
+        if metrics_on:
+            def _app_stats() -> dict:
+                rr = road.latest()
+                mode = rr.mode if rr else None
+                grade_model = {"asphalt": asphalt_model, "cement": cement_model}.get(mode)
+                return {
+                    "fps": fps_shown if last_n > 0 else None,     # 第一秒還沒算出 fps，不要記 0
+
+                    "road_mode": mode,
+                    "road_label": rr.label if rr else None,
+                    "road_round_ms": road.last_ms,
+                    "resnet_infer_ms": resnet.last_ms,
+                    "grade_infer_ms": grade_model.last_ms if grade_model else None,
+                    "crack_ms": cement.crack_detector.last_ms if mode == "cement" else None,
+                    "det_round_ms": det.last_ms,
+                    "yolo_infer_ms": yolo_model.last_ms,
+                    **loop_ms,
+                    "recording": 1 if recorder else 0,
+                    "hailo_temp": dev.chip_temperature(),
+                }
+            metrics = MetricsRecorder(cfg.metrics, _app_stats,
+                                      {"resnet": resnet.name, "asphalt": asphalt_model.name,
+                                       "cement": cement_model.name, "yolo": yolo_model.name})
+            metrics.start()
+            print(f"指標取樣中（每 {cfg.metrics.interval:g} 秒）→ {metrics.csv_path}")
+
         print("開始。按 q 或 Ctrl+C 結束；滑鼠拖曳設定警戒區；r 重設追蹤。")
 
         while True:
@@ -151,6 +189,7 @@ def main() -> None:
             det.submit(lores)
 
             # 路面：網格疊回 ROI，白框標出分析範圍
+            t_draw = time.perf_counter()
             rr = road.latest()
             if rr is not None and rr.result is not None:
                 frame[ry1:ry2, rx1:rx2] = rr.grader.draw(roi_crop, rr.result)
@@ -168,11 +207,18 @@ def main() -> None:
                 fps_shown = (frame_idx - last_n) / (now - last_t)
                 last_t, last_n = now, frame_idx
             _draw_status(frame, fps_shown, road, det, rr)
+            t_write = time.perf_counter()
 
             if recorder:
                 recorder.write(frame)
+            t_show = time.perf_counter()
             cv2.imshow(window, frame)
             key = cv2.waitKey(1) & 0xFF
+            if metrics:
+                t_end = time.perf_counter()
+                loop_ms["draw_ms"] = (t_write - t_draw) * 1000.0
+                loop_ms["write_ms"] = (t_show - t_write) * 1000.0
+                loop_ms["show_ms"] = (t_end - t_show) * 1000.0
             if key == ord("q"):
                 break
             if key == ord("r"):
@@ -184,12 +230,12 @@ def main() -> None:
         interrupted = True
         print("\n偵測到中斷，正在收尾存檔...")
     finally:
-        # 順序很重要：先停兩條分析緒（它們還在用 Hailo），再收 writer（moov 在 release 時才寫），
-        # 關相機，最後才釋放 Hailo
-        for t in (road, det):
+        # 順序很重要：先停取樣緒（它會讀 Hailo 溫度）與兩條分析緒（它們還在用 Hailo），
+        # 再收 writer（moov 在 release 時才寫），關相機，最後才釋放 Hailo
+        for t in (metrics, road, det):
             if t:
                 t.stop()
-        for t in (road, det):
+        for t in (metrics, road, det):
             if t:
                 t.join(timeout=5)
         if recorder:
@@ -207,6 +253,10 @@ def main() -> None:
           + (f"，偵測 {det.update_count} 次" if det else ""))
     if recorder:
         print(f"錄影輸出到: {cfg.output.dir}")
+    if metrics:
+        print()
+        print(metrics.summary())
+        print(f"（CSV：{metrics.csv_path}；摘要：{metrics.summary_path}）")
 
 
 if __name__ == "__main__":

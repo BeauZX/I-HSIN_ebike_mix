@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python3 -m venv --system-site-packages venv)",
       "Bash(./venv/bin/pip install *)",
-      "Bash(./venv/bin/python -c ' *)"
+      "Bash(./venv/bin/python -c ' *)",
+      "WebSearch"
     ]
   }
 }

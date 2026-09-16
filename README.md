@@ -25,6 +25,7 @@ cd /home/beau/Desktop/System_Integration
 uv run main.py                 # 沿用上次框的路面 ROI 與警戒區，開視窗、錄影
 uv run main.py --ui            # 重新框選路面 ROI 與警戒區（鏡頭位置動過、或改了 rotation 時）
 uv run main.py --no-save       # 只顯示不錄影
+uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階段耗時（見下方「量測功耗與降頻」）
 ```
 
 視窗操作：
@@ -53,6 +54,7 @@ uv run main.py --no-save       # 只顯示不錄影
 | [`cement.yaml`](configs/cement.yaml) | cement | 模型、類別名、網格、裂縫參數檔、融合權重、PID / EMA 平滑 |
 | [`detect.yaml`](configs/detect.yaml) | OverlayView | YOLO 模型、信心門檻、保留類別、追蹤器、警戒區檔與預設 |
 | [`output.yaml`](configs/output.yaml) | — | 輸出資料夾、分段秒數、錄影 fps、視窗標題 |
+| [`metrics.yaml`](configs/metrics.yaml) | — | 指標取樣開關、間隔、輸出資料夾、Hailo / 相機 / 風扇的估算參數與 DC-DC 效率 |
 
 ### 路面種類切換的遲滯
 
@@ -66,6 +68,30 @@ uv run main.py --no-save       # 只顯示不錄影
 
 `outputs/20260915_160140.mp4`（該段開始時間命名，每 60 秒一段，可在 `output.yaml` 改）。
 錄的就是螢幕上看到的合併畫面。依牆上時鐘補幀/丟幀，處理變慢時播放速度仍與真實時間一致。
+
+---
+
+## 量測功耗與降頻
+
+`uv run main.py --metrics`（或把 `metrics.yaml` 的 `enabled` 設 true）會在同一個程序裡每秒取樣一次，
+寫到 `outputs/metrics/<開始時間>.csv`，結束時印摘要並存 `<開始時間>_summary.txt`。
+重新產摘要：`uv run python -m src.metrics outputs/metrics/<檔名>.csv`（估算欄位會依當時的 `metrics.yaml` 重算，改參數不用重新量）。
+
+哪些是實測、哪些是估算（沒有外接功率計時的極限）：
+
+| | 來源 | 說明 |
+|---|---|---|
+| **實測** Pi 5 板上功耗 | `vcgencmd pmic_read_adc` | 12 條電源軌各自的電流 × 電壓，加總為 `board_w` |
+| **實測** ARM 頻率 | cpufreq `time_in_state` | 每秒內各檔停留時間 → 時間加權平均、2.4 GHz 佔比 |
+| **實測** 降頻 / 低電壓 | `vcgencmd get_throttled` + SoC 溫度 + 風扇 PWM | 摘要會說執行期間有沒有出現旗標 |
+| **實測** Hailo 使用率 | `hailortcli monitor` | 程式自動設 `HAILO_MONITOR=1`，裝置與四個模型各自的使用率 / fps |
+| **實測** Hailo 晶片溫度 | HailoRT `get_chip_temperature()` | 只能在持有裝置的程序內讀 |
+| **估算** Hailo / 相機 / 風扇瓦數 | `metrics.yaml` 的 `estimate` | 這塊 AI HAT 沒有電流感測器（`hailortcli measure-power` 不支援），Hailo 依使用率在待機 / 滿載之間線性內插，風扇依 PWM 折算 |
+| **估算** 整套 | `(board_w + Hailo + 相機 + 風扇) / efficiency` | `est_total_w`；報告時請註明估算部分與參數 |
+
+另外每列也記 CPU 各核使用率、記憶體、顯示 fps、路面模式、各階段耗時
+（ResNet / 分級 / 裂縫偵測 / YOLO 推論、主緒疊圖 / 寫檔 / 顯示），方便把功耗曲線對到程式狀態。
+要看穩態，建議至少跑 10～15 分鐘讓溫度穩定。
 
 ---
 

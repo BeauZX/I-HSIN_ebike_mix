@@ -17,6 +17,7 @@ segfault / bus error，因此 close() 依 bindings → buffer → configured →
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -52,6 +53,8 @@ class HailoModel:
         self._bindings: list = []
         self._inputs: list[np.ndarray] = []
         self._lock = threading.Lock()
+        self.infer_count = 0            # 供 metrics 取樣：呼叫次數與最近一次 infer() 的耗時
+        self.last_ms = 0.0
 
         self.infer_model = vdevice.create_infer_model(str(self.hef_path))
         ins, outs = self.infer_model.inputs, self.infer_model.outputs
@@ -87,6 +90,7 @@ class HailoModel:
         if self.configured is None:
             raise RuntimeError(f"{self.name}: 模型已關閉")
         results: list = []
+        t0 = time.perf_counter()
         with self._lock:
             for start in range(0, len(images), self.pool):
                 chunk = images[start:start + self.pool]
@@ -101,6 +105,8 @@ class HailoModel:
                         results.append(out.copy())
                     else:                       # NMS：list of per-class arrays
                         results.append([np.array(a, dtype=np.float32, copy=True) for a in out])
+        self.last_ms = (time.perf_counter() - t0) * 1000.0
+        self.infer_count += 1
         return results
 
     def close(self) -> None:
@@ -137,6 +143,17 @@ class HailoDevice:
         print(f"  已載入 {m.name}：輸入 {m.input_shape} → 輸出 {m.output_shape}"
               f"{'（NMS）' if m.is_nms else ''}，pool {m.pool}")
         return m
+
+    def chip_temperature(self) -> float | None:
+        """Hailo-8 晶片溫度（°C，兩個感測器取高者）。這板子讀不到功耗，溫度是唯一的硬體回饋。
+        只能在持有裝置的這個程序內讀（第二個程序開不了裝置）；讀失敗回 None。"""
+        if self.vdevice is None:
+            return None
+        try:
+            t = self.vdevice.get_physical_devices()[0].control.get_chip_temperature()
+            return max(float(t.ts0_temperature), float(t.ts1_temperature))
+        except Exception:
+            return None
 
     def close(self) -> None:
         for m in reversed(self._models):

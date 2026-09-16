@@ -12,6 +12,7 @@ GridClassifier 取代 asphalt / cement 原本的 HailoClassifier：前處理一�
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import cv2
@@ -55,6 +56,23 @@ class GridClassifier:
         return np.stack(outs).astype(np.float32).reshape(len(cells), -1)
 
 
+class _TimedCrackDetector:
+    """包一層記錄 detect() 耗時（水泥輪裡唯一的純 CPU 大項，供 metrics 取樣）；其餘屬性透傳。"""
+
+    def __init__(self, inner: CrackDetector):
+        self._inner = inner
+        self.last_ms = 0.0
+
+    def detect(self, *args, **kwargs):
+        t0 = time.perf_counter()
+        out = self._inner.detect(*args, **kwargs)
+        self.last_ms = (time.perf_counter() - t0) * 1000.0
+        return out
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 class AsphaltGrader:
     name = "asphalt"
 
@@ -83,7 +101,7 @@ class CementGrader:
         self.cfg = cfg
         self.rows, self.cols = cfg.grid.rows, cfg.grid.cols
         self.classifier = GridClassifier(model, cfg.class_names)
-        self.crack_detector = CrackDetector(load_crack_config(cfg.crack_preset))
+        self.crack_detector = _TimedCrackDetector(CrackDetector(load_crack_config(cfg.crack_preset)))
         self.fusion = FusionConfig(rows=self.rows, cols=self.cols, **cfg.fusion)
         self.reset()
 

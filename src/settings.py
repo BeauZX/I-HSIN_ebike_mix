@@ -7,6 +7,7 @@
     cement.yaml     水泥分級 + 裂縫
     detect.yaml     人車偵測 / 追蹤 / 警戒區
     output.yaml     畫面與錄影
+    metrics.yaml    系統指標取樣（功耗 / 頻率 / 降頻）與估算參數
 
 設定檔裡的相對路徑一律相對於專案根目錄，在哪個目錄下執行都一樣。
 模型載入要好幾秒，所以先把明顯寫錯的值擋下來。
@@ -124,6 +125,18 @@ class OutputSettings:
 
 
 @dataclass
+class MetricsSettings:
+    enabled: bool
+    interval: float
+    dir: Path
+    hailo_idle_w: float
+    hailo_full_w: float
+    camera_w: float
+    fan_full_w: float
+    efficiency: float
+
+
+@dataclass
 class Settings:
     camera: CameraSettings
     road_type: RoadTypeSettings
@@ -131,6 +144,7 @@ class Settings:
     cement: CementSettings
     detect: DetectSettings
     output: OutputSettings
+    metrics: MetricsSettings
     config_dir: Path = field(default=DEFAULT_CONFIG_DIR)
 
 
@@ -250,4 +264,22 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
     if not output.window_title.isascii():
         raise SettingsError("output.yaml 的 window_title 只能用 ASCII（OpenCV Qt 的限制）")
 
-    return Settings(camera, road_type, asphalt, cement, detect, output, config_dir)
+    # ── metrics ──
+    mt = _load_yaml(config_dir / "metrics.yaml")
+    est = mt.get("estimate") or {}
+    metrics = MetricsSettings(
+        enabled=bool(mt.get("enabled", False)),
+        interval=float(mt.get("interval", 1.0)),
+        dir=_resolve(mt.get("dir", "outputs/metrics")),
+        hailo_idle_w=float(est.get("hailo_idle_w", 1.0)),
+        hailo_full_w=float(est.get("hailo_full_w", 2.5)),
+        camera_w=float(est.get("camera_w", 0.25)),
+        fan_full_w=float(est.get("fan_full_w", 0.4)),
+        efficiency=float(est.get("efficiency", 0.88)),
+    )
+    if metrics.interval <= 0:
+        raise SettingsError("metrics.yaml 的 interval 必須大於 0")
+    if not 0 < metrics.efficiency <= 1:
+        raise SettingsError("metrics.yaml 的 estimate.efficiency 必須在 0~1 之間")
+
+    return Settings(camera, road_type, asphalt, cement, detect, output, metrics, config_dir)
