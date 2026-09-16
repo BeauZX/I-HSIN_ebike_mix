@@ -11,6 +11,7 @@
     uv run main.py                 沿用上次框的路面 ROI 與警戒區，開視窗、錄影
     uv run main.py --ui            重新框選路面 ROI 與警戒區（鏡頭位置動過時）
     uv run main.py --no-save       只顯示不錄影
+    uv run main.py --no-display    只錄影不顯示即時畫面（框選視窗照常；Ctrl+C 結束）
     uv run main.py --metrics       同時取樣功耗 / 頻率 / 降頻 / 各階段耗時（見 src/metrics.py，configs/metrics.yaml）
 
 視窗操作：q 結束、滑鼠左鍵拖曳 = 設定警戒區（放開即存檔）、r 重設追蹤。
@@ -54,10 +55,16 @@ def main() -> None:
     parser.add_argument("--ui", action="store_true",
                         help="重新框選路面 ROI 與警戒區（不沿用 presets/roi.json、warning_zone.json）")
     parser.add_argument("--no-save", action="store_true", help="只顯示不錄影")
+    parser.add_argument("--no-display", action="store_true",
+                        help="只錄影不開即時畫面視窗（省顯示開銷；框選 ROI / 警戒區的視窗照常，"
+                             "執行中沒有 q / r 鍵與滑鼠改警戒區，用 Ctrl+C 或 SIGTERM 結束）")
     parser.add_argument("--metrics", action="store_true",
                         help="取樣功耗 / 頻率 / 降頻 / 各階段耗時到 CSV（metrics.yaml 的 enabled 為 false 時臨時打開）")
     parser.add_argument("--configs", default=None, help="設定資料夾（預設 configs/）")
     args = parser.parse_args()
+    if args.no_save and args.no_display:
+        parser.error("--no-save 與 --no-display 不能同時用（不顯示也不錄影就沒有輸出了）")
+    show = not args.no_display
 
     try:
         cfg = load_settings(args.configs) if args.configs else load_settings()
@@ -129,9 +136,10 @@ def main() -> None:
         zone.select(preview, args.ui, win_w, win_h)
 
         window = cfg.output.window_title
-        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window, W, H)      # 原生尺寸顯示，拉大會經插值讓小字糊掉
-        cv2.setMouseCallback(window, zone.mouse_callback)
+        if show:
+            cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window, W, H)      # 原生尺寸顯示，拉大會經插值讓小字糊掉
+            cv2.setMouseCallback(window, zone.mouse_callback)
         renderer = OverlayRenderer()
 
         # ── 背景緒 ──
@@ -173,7 +181,10 @@ def main() -> None:
             metrics.start()
             print(f"指標取樣中（每 {cfg.metrics.interval:g} 秒）→ {metrics.csv_path}")
 
-        print("開始。按 q 或 Ctrl+C 結束；滑鼠拖曳設定警戒區；r 重設追蹤。")
+        if show:
+            print("開始。按 q 或 Ctrl+C 結束；滑鼠拖曳設定警戒區；r 重設追蹤。")
+        else:
+            print("開始（不顯示畫面）。按 Ctrl+C 結束。")
 
         while True:
             got = cam.read()
@@ -212,8 +223,10 @@ def main() -> None:
             if recorder:
                 recorder.write(frame)
             t_show = time.perf_counter()
-            cv2.imshow(window, frame)
-            key = cv2.waitKey(1) & 0xFF
+            key = -1
+            if show:
+                cv2.imshow(window, frame)
+                key = cv2.waitKey(1) & 0xFF
             if metrics:
                 t_end = time.perf_counter()
                 loop_ms["draw_ms"] = (t_write - t_draw) * 1000.0

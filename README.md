@@ -25,6 +25,7 @@ cd /home/beau/Desktop/System_Integration
 uv run main.py                 # 沿用上次框的路面 ROI 與警戒區，開視窗、錄影
 uv run main.py --ui            # 重新框選路面 ROI 與警戒區（鏡頭位置動過、或改了 rotation 時）
 uv run main.py --no-save       # 只顯示不錄影
+uv run main.py --no-display    # 只錄影不顯示即時畫面（省顯示開銷；框選視窗照常；Ctrl+C 結束）
 uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階段耗時（見下方「量測功耗與降頻」）
 ```
 
