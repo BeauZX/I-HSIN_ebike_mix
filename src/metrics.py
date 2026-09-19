@@ -7,9 +7,9 @@ Hailo-8 一次只能被一個程序開啟，晶片溫度與各模型推論耗時
     實測   Pi 5 板上功耗：PMIC 每條電源軌的電流 × 電壓加總（vcgencmd pmic_read_adc）
            ARM 頻率與各檔停留時間（cpufreq）、SoC 溫度、get_throttled 旗標、風扇 PWM/轉速
            CPU 使用率、記憶體、Hailo 裝置/各模型使用率（hailortcli monitor）、Hailo 晶片溫度
-    估算   Hailo / 相機 / 風扇的瓦數：板子沒有電流感測器（hailortcli measure-power 回 UNSUPPORTED），
-           只能拿 configs/metrics.yaml 的規格值依使用率 / PWM 折算，再除以 DC-DC 效率得到整套。
-           摘要會把兩者分開列，報告時請註明估算部分。
+    估算   Hailo / 風扇 / USB 的瓦數：板子沒有電流感測器（hailortcli measure-power 回 UNSUPPORTED），
+           只能拿 configs/metrics.yaml 的校準參數依使用率 / PWM 折算（公式見 apply_estimates），
+           全部換算到 5V 輸入側後相加得到整套。摘要會把兩者分開列，報告時請註明估算部分。
 
 Hailo 使用率靠 HailoRT 的 monitor：程序要在建 VDevice 前設 HAILO_MONITOR=1（main.py 負責），
 之後 `hailortcli monitor` 會每秒印一份純文字表格，這裡開它當子程序、解析 stdout。
@@ -355,7 +355,7 @@ class MetricsRecorder(threading.Thread):
         self._fh.close()
 
     def summary(self) -> str:
-        text = summarize(self.rows, self.csv_path, self.throttled_start)
+        text = summarize(self.rows, self.csv_path, self.throttled_start, self.cfg)
         try:
             self.summary_path.write_text(text + "\n", encoding="utf-8")
         except OSError as e:
@@ -373,12 +373,23 @@ def apply_estimates(row: dict, c: MetricsSettings) -> None:
             return None
 
     util, pwm, board = f("hailo_util"), f("fan_pwm"), f("board_w")
-    est_hailo = c.hailo_idle_w + (c.hailo_full_w - c.hailo_idle_w) * (util / 100.0 if util is not None else 0.0)
+    # 所有 est_* 都以 5V 輸入側為基準（4S LiPo 放電回充校準，2026-09-18）：
+    #   整套 = board_w / efficiency
+    #        + (hailo_idle_w + hailo_k_w × util) / hat_efficiency
+    #        + fan_full_w × pwm / 255
+    #        + usb_5v_w + misc_5v_w
+    # Hailo：hailo_util 是排程佔用率不是開關活動率，不能拿 idle→滿載線性內插（原公式高估約 3 倍），
+    #        改成 idle + k × util；除的是 hat_efficiency——Hailo 走 AI HAT+ 板上的 DC-DC，不經 Pi 的 PMIC
+    est_hailo = (c.hailo_idle_w + c.hailo_k_w * (util / 100.0 if util is not None else 0.0)) / c.hat_efficiency
+    # 風扇：5V 直供，中間沒有轉換，不除任何效率
     est_fan = c.fan_full_w * pwm / 255.0 if pwm else 0.0
+    # 相機：CSI 供電來自 3V3_SYS / 1V8_SYS，已含在 board_w，camera_w 設 0 避免重複計算
     row["est_hailo_w"] = round(est_hailo, 3)
     row["est_camera_w"] = c.camera_w
     row["est_fan_w"] = round(est_fan, 3)
-    row["est_total_w"] = round((board + est_hailo + c.camera_w + est_fan) / c.efficiency, 3) if board is not None else ""
+    # 只有 board_w 經 Pi 的 PMIC，其餘都是 5V 側直接相加
+    row["est_total_w"] = (round(board / c.efficiency + est_hailo + c.camera_w + est_fan + c.usb_5v_w + c.misc_5v_w, 3)
+                          if board is not None else "")
 
 
 # ── 摘要 ──────────────────────────────────────────────────────
@@ -408,7 +419,11 @@ def _mean(rows: list[dict], key: str) -> float | None:
     return sum(v) / len(v) if v else None
 
 
-def summarize(rows: list[dict], csv_path: Path | None = None, throttled_start: int | None = None) -> str:
+def summarize(rows: list[dict], csv_path: Path | None = None, throttled_start: int | None = None,
+              cfg: MetricsSettings | None = None) -> str:
+    # usb / misc 是固定值、沒有對應 CSV 欄位，要從 cfg 拿；沒給 cfg（設定載入失敗）就當 0
+    usb = cfg.usb_5v_w if cfg else 0.0
+    misc = cfg.misc_5v_w if cfg else 0.0
     L: list[str] = []
     n = len(rows)
     dur = float(rows[-1]["elapsed_s"]) if rows else 0.0
@@ -431,13 +446,22 @@ def summarize(rows: list[dict], csv_path: Path | None = None, throttled_start: i
                  + ("（< 4.8 V 表示供電吃緊）" if min(ext) < 4.8 else ""))
     eh, ec, ef = _mean(rows, "est_hailo_w"), _mean(rows, "est_camera_w"), _mean(rows, "est_fan_w")
     hu = _mean(rows, "hailo_util")
-    L.append(f"  估算（規格值折算，非實測）：Hailo-8 {eh or 0:.2f} W"
+    L.append(f"  估算（校準參數折算，非實測；5V 側）：Hailo-8 {eh or 0:.2f} W"
              + (f"（使用率平均 {hu:.0f}%）" if hu is not None else "（沒有使用率資料，以待機值計）")
-             + f"、相機 {ec or 0:.2f} W、風扇 {ef or 0:.2f} W")
-    L.append(f"  整套估算（含 DC-DC 效率換算）：{_stat(rows, 'est_total_w', unit=' W')}")
-    mean_total = _mean(rows, "est_total_w")
-    if mean_total and dur > 0:
-        L.append(f"    ≈ 每小時 {mean_total:.2f} Wh，這次執行共 {mean_total * dur / 3600:.2f} Wh")
+             + f"、相機 {ec or 0:.2f} W、風扇 {ef or 0:.2f} W、USB {usb:.2f} W、雜項 {misc:.2f} W")
+    L.append(f"  未經 PMIC 小計（Hailo + 相機 + 風扇 + USB + 雜項）：{(eh or 0) + (ec or 0) + (ef or 0) + usb + misc:.2f} W")
+    tot = _num(rows, "est_total_w")
+    if tot:
+        mean_total = sum(tot) / len(tot)
+        # 10 s 滑動平均峰值：取樣間隔由 elapsed_s 反推；瞬時峰值受取樣混疊影響，只供參考
+        w = max(1, round(10.0 * (len(tot) - 1) / dur)) if dur > 0 else 1
+        peak10 = max(sum(tot[i:i + w]) / w for i in range(max(1, len(tot) - w + 1)))
+        L.append(f"  整套估算（5V 輸入側）：平均 {mean_total:.2f} W（不確定度 ±0.35 W），最低 {min(tot):.2f} W")
+        L.append(f"    10s 平均峰值 {peak10:.2f} W；瞬時峰值 {max(tot):.2f} W（含取樣混疊，勿用於選料）")
+        if dur > 0:
+            L.append(f"    ≈ 每小時 {mean_total:.2f} Wh，這次執行共 {mean_total * dur / 3600:.2f} Wh")
+    else:
+        L.append("  整套估算（5V 輸入側）：（無資料）")
 
     # 頻率
     L.append("")
@@ -528,6 +552,7 @@ def main(argv: list[str]) -> int:
     with open(path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     # 估算欄位依「現在的」metrics.yaml 重算，所以改了估算參數只要重跑這個指令，不用重新量
+    cfg = None
     try:
         cfg = load_settings().metrics
     except SettingsError as e:
@@ -535,9 +560,10 @@ def main(argv: list[str]) -> int:
     else:
         for r in rows:
             apply_estimates(r, cfg)
-        print(f"（估算參數取自 configs/metrics.yaml：Hailo {cfg.hailo_idle_w}~{cfg.hailo_full_w} W、"
-              f"相機 {cfg.camera_w} W、風扇 {cfg.fan_full_w} W、效率 {cfg.efficiency}）")
-    print(summarize(rows, path))
+        print(f"（估算參數取自 configs/metrics.yaml：Hailo {cfg.hailo_idle_w} + {cfg.hailo_k_w}×util W / {cfg.hat_efficiency}、"
+              f"相機 {cfg.camera_w} W、風扇 {cfg.fan_full_w} W、USB {cfg.usb_5v_w} W、雜項 {cfg.misc_5v_w} W、"
+              f"PMIC 效率 {cfg.efficiency}）")
+    print(summarize(rows, path, cfg=cfg))
     return 0
 
 

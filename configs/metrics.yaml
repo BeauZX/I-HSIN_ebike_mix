@@ -8,17 +8,32 @@ enabled: true
 interval: 1.0             # 取樣間隔（秒）。每次取樣約 2 次 vcgencmd（各 ~10 ms），1 秒對系統幾乎無影響
 dir: outputs/metrics
 
-# 估算參數。Pi 板本身的功耗由 PMIC 實測；Hailo / 相機 / 風扇這台板子沒有電流感測器
-# （AI HAT+ 的 hailortcli measure-power 回 UNSUPPORTED），只能用規格值依負載折算，
-# 摘要會把「實測」與「估算」分開列。出處與查證日期（2026-09-16）：
-#   Hailo-8：官網 typical 2.5 W；M.2 模組板上 INA 實測（Mario Bergeron, Edge AI Power Benchmarking Part 1）
-#            ResNet-50 滿載平均 3.96~4.06 W，待機 0.84 W（PCIe ASPM 關）/ 0.51 W（ASPM L1 開；這台 lspci 顯示 L1 Enabled）
-#   IMX219：Sony datasheet Table 45，全解析度 30 fps 串流 VANA 33 mA@3.0 V + VDDL 100 mA@1.3 V ≈ 0.23 W（不含相機板穩壓器）
+# 估算參數。Pi 板本身的功耗由 PMIC 實測；Hailo / 風扇 / USB 這台板子沒有電流感測器
+# （AI HAT+ 的 hailortcli measure-power 回 UNSUPPORTED），只能依負載折算，
+# 摘要會把「實測」與「估算」分開列。
+# 參數已用 4S LiPo 放電回充校準（2026-09-18，3.234 h / 1.40 Ah），整套 5V 側公式：
+#   整套 = board_w / efficiency
+#        + (hailo_idle_w + hailo_k_w × hailo_util) / hat_efficiency
+#        + fan_full_w × fan_pwm / 255
+#        + usb_5v_w + misc_5v_w
+# 原始出處（2026-09-16 查證）：
+#   Hailo-8：M.2 模組板上 INA 實測（Mario Bergeron, Edge AI Power Benchmarking Part 1）待機 0.51 W（ASPM L1 開）
 #   Active Cooler：官方產品簡介沒有電流規格（5 V、最高 8000 RPM），0.4 W 為 5 V 小風扇通則估計
 #   效率：DA9091 PMIC 無公開 datasheet，0.88 為假設值
 estimate:
   hailo_idle_w: 0.5       # Hailo-8 待機（使用率 0%），實測值（ASPM L1 開）
-  hailo_full_w: 4.0       # Hailo-8 滿載（使用率 100%），實測值；中間依 hailortcli monitor 的使用率線性內插
-  camera_w: 0.25          # IMX219 串流中，datasheet 換算
-  fan_full_w: 0.4         # 官方 Active Cooler 全速（估計）；依 PWM 比例折算
-  efficiency: 0.88        # PMIC DC-DC 轉換效率（假設）：整套 = (Pi 板 + Hailo + 相機 + 風扇) / efficiency
+  hailo_k_w: 0.76         # 每 100% hailortcli monitor 使用率增加的瓦數（校準值）。使用率是排程佔用率不是開關活動率，
+                          # 不能拿 idle→滿載 4 W 線性內插，那樣高估約 3 倍
+  camera_w: 0.0           # IMX219 由 CSI 的 3V3_SYS / 1V8_SYS 供電，已含在 board_w，另加會重複計算
+  fan_full_w: 0.4         # 官方 Active Cooler 全速（估計）；依 PWM 比例折算。5V 直供，不經任何 DC-DC
+  usb_5v_w: 0.10          # USB 裝置（5V 直供）
+  misc_5v_w: 0.15         # 其他 5V 側雜項（LED、待機損耗等）
+  efficiency: 0.88        # Pi 5 PMIC（DA9091）DC-DC 效率（假設）：只套在 board_w
+  hat_efficiency: 0.90    # AI HAT+ 板上 DC-DC 效率（假設）：只套在 Hailo，它不經 Pi 的 PMIC
+
+# 電池（放電校準用的那顆）
+battery:
+  cells: 4
+  capacity_mah: 2600
+  cutoff_v_per_cell: 3.70
+  buck_efficiency: 0.88

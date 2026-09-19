@@ -5,7 +5,7 @@ index: 0            # 用哪顆鏡頭（rpicam-hello --list-cameras 的編號）
 width: 1280
 height: 720
 fps: 25             # 實測值：Pi 5 上 720p 邊錄邊分析大約就是這個上限
-rotation: 180       # 0 或 180。鏡頭倒裝時設 180，由 ISP 翻轉（hflip+vflip），不耗 CPU
+rotation: 0       # 0 或 180。鏡頭倒裝時設 180，由 ISP 翻轉（hflip+vflip），不耗 CPU
                     # 改了這個要加 --ui 重新框選路面 ROI 與警戒區
 
 exposure: normal    # 對應 rpicam-vid --exposure：

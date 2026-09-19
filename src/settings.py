@@ -130,10 +130,17 @@ class MetricsSettings:
     interval: float
     dir: Path
     hailo_idle_w: float
-    hailo_full_w: float
+    hailo_k_w: float
     camera_w: float
     fan_full_w: float
+    usb_5v_w: float
+    misc_5v_w: float
     efficiency: float
+    hat_efficiency: float
+    battery_cells: int
+    battery_capacity_mah: float
+    battery_cutoff_v_per_cell: float
+    battery_buck_efficiency: float
 
 
 @dataclass
@@ -267,19 +274,29 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
     # ── metrics ──
     mt = _load_yaml(config_dir / "metrics.yaml")
     est = mt.get("estimate") or {}
+    bat = mt.get("battery") or {}
     metrics = MetricsSettings(
         enabled=bool(mt.get("enabled", False)),
         interval=float(mt.get("interval", 1.0)),
         dir=_resolve(mt.get("dir", "outputs/metrics")),
-        hailo_idle_w=float(est.get("hailo_idle_w", 1.0)),
-        hailo_full_w=float(est.get("hailo_full_w", 2.5)),
-        camera_w=float(est.get("camera_w", 0.25)),
+        hailo_idle_w=float(est.get("hailo_idle_w", 0.5)),
+        hailo_k_w=float(est.get("hailo_k_w", 0.76)),
+        camera_w=float(est.get("camera_w", 0.0)),
         fan_full_w=float(est.get("fan_full_w", 0.4)),
+        usb_5v_w=float(est.get("usb_5v_w", 0.10)),
+        misc_5v_w=float(est.get("misc_5v_w", 0.15)),
         efficiency=float(est.get("efficiency", 0.88)),
+        hat_efficiency=float(est.get("hat_efficiency", 0.90)),
+        battery_cells=int(bat.get("cells", 4)),
+        battery_capacity_mah=float(bat.get("capacity_mah", 2600)),
+        battery_cutoff_v_per_cell=float(bat.get("cutoff_v_per_cell", 3.70)),
+        battery_buck_efficiency=float(bat.get("buck_efficiency", 0.88)),
     )
     if metrics.interval <= 0:
         raise SettingsError("metrics.yaml 的 interval 必須大於 0")
     if not 0 < metrics.efficiency <= 1:
         raise SettingsError("metrics.yaml 的 estimate.efficiency 必須在 0~1 之間")
+    if not 0 < metrics.hat_efficiency <= 1:
+        raise SettingsError("metrics.yaml 的 estimate.hat_efficiency 必須在 0~1 之間")
 
     return Settings(camera, road_type, asphalt, cement, detect, output, metrics, config_dir)
