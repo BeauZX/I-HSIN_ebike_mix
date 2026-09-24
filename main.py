@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """路面辨識整合系統 — 進入點。
 
-整合四個專案，一顆 CSI 鏡頭、一個程序、一顆 Hailo-8：
+整合五個專案，一顆 CSI 鏡頭、一個程序、一顆 Hailo-8：
     road_classification  ResNet34 判路面種類 → 決定用哪個分級模型
     asphalt              瀝青路：3×5 網格劣化分級
     cement               水泥路：3×5 網格分級 × 影像法裂縫定位 融合
     OverlayView          人車偵測 + Kalman 追蹤 + 警戒區警報
+    car_door             車門開啟 / 關閉偵測
 
 執行：
     uv run main.py                 沿用上次框的路面 ROI 與警戒區，開視窗、錄影
@@ -14,13 +15,16 @@
     uv run main.py --no-display    只錄影不顯示即時畫面（框選視窗照常；Ctrl+C 結束）
     uv run main.py --metrics       同時取樣功耗 / 頻率 / 降頻 / 各階段耗時（見 src/metrics.py，configs/metrics.yaml）
 
+偵測結果（路面種類、網格等級、人車數量、車門）只在狀態改變時記到 outputs/logs/*.jsonl（見 src/event_log.py）。
+
 視窗操作：q 結束、滑鼠左鍵拖曳 = 設定警戒區（放開即存檔）、r 重設追蹤。
-參數在 configs/ 底下，一個專案一個檔（camera / road_type / asphalt / cement / detect / output）。
+參數在 configs/ 底下，一個專案一個檔（camera / road_type / asphalt / cement / detect / door / output）。
 
 執行緒：
     主緒        讀相機 → 疊圖 → 顯示 → 錄影（維持相機幀率，從不等 Hailo）
     路面分析緒  ResNet → asphalt 或 cement 分級（見 src/analyzer.py）
     偵測緒      YOLO → 追蹤 → 警戒判斷（見 src/detect.py）
+    車門緒      YOLOv11m 車門開 / 關（見 src/door.py）
 """
 
 import argparse
@@ -36,20 +40,22 @@ from src.draw import put_text_outlined
 from src.settings import SettingsError, load_settings
 
 
-def _draw_status(frame, fps_shown, road, det, rr) -> None:
-    """左上角疊一行狀態：實際幀率、路面種類與分級模式、兩條分析緒的次數與耗時。"""
+def _draw_status(frame, fps_shown, road, det, door, rr, dr) -> None:
+    """左上角疊一行狀態：實際幀率、路面種類與分級模式、車門狀態、三條分析緒的次數與耗時。"""
     if rr is None:
         road_txt = "road: ..."
     else:
         mode = {"asphalt": "asphalt grid", "cement": "cement grid+crack", "none": "no grading"}[rr.mode]
         road_txt = f"{rr.label} {rr.confidence:.2f} -> {mode}"
+    door_txt = "door: ..." if dr is None else f"door: {dr.state.upper()}"
     text = (f"{fps_shown:4.1f} fps | {road_txt} #{road.update_count} ({road.last_ms:.0f} ms)"
-            f" | det #{det.update_count} ({det.last_ms:.0f} ms)")
+            f" | det #{det.update_count} ({det.last_ms:.0f} ms)"
+            f" | {door_txt} #{door.update_count} ({door.last_ms:.0f} ms)")
     put_text_outlined(frame, text, (10, 24), 0.6)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="路面辨識整合系統（路面種類 → 劣化分級 + 人車警戒）",
+    parser = argparse.ArgumentParser(description="路面辨識整合系統（路面種類 → 劣化分級 + 人車警戒 + 車門偵測）",
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
                                      epilog="參數請改 configs/ 底下的各個 yaml")
     parser.add_argument("--ui", action="store_true",
@@ -80,6 +86,8 @@ def main() -> None:
     from src.analyzer import RoadAnalyzer
     from src.camera import Camera
     from src.detect import DetectorThread, HailoDetector, OverlayRenderer, WarningZone
+    from src.door import DoorDetector, DoorThread, draw_doors
+    from src.event_log import EventLogger, snapshot
     from src.grading.graders import AsphaltGrader, CementGrader
     from src.hailo import HailoDevice
     from src.metrics import MetricsRecorder
@@ -94,8 +102,9 @@ def main() -> None:
 
     dev = HailoDevice()
     cam = None
-    road = det = None
+    road = det = door = None
     recorder = None
+    logger = None
     metrics = None
     loop_ms = {"draw_ms": 0.0, "write_ms": 0.0, "show_ms": 0.0}    # 主緒每幀各段耗時，供 metrics 取樣
     frame_idx = 0
@@ -107,10 +116,16 @@ def main() -> None:
         asphalt_model = dev.load(cfg.asphalt.hef, pool=cfg.asphalt.grid.rows * cfg.asphalt.grid.cols)
         cement_model = dev.load(cfg.cement.hef, pool=cfg.cement.grid.rows * cfg.cement.grid.cols)
         yolo_model = dev.load(cfg.detect.hef)
+        door_model = dev.load(cfg.door.hef)
         road_type = RoadTypeClassifier(resnet, cfg.road_type)
         asphalt = AsphaltGrader(asphalt_model, cfg.asphalt)
         cement = CementGrader(cement_model, cfg.cement)
         detector = HailoDetector(yolo_model, cfg.detect)
+        door_detector = DoorDetector(door_model, cfg.door)
+        # 車門模型共用人車偵測的 lores 串流，兩個模型的輸入尺寸必須一樣
+        if door_detector.input_size != detector.input_size:
+            raise RuntimeError(f"車門模型輸入 {door_detector.input_size} 與人車偵測 {detector.input_size} "
+                               "不同，無法共用 lores 串流")
 
         # ── 鏡頭 ──
         cam = Camera(cfg.camera, lores_size=detector.input_size)
@@ -145,11 +160,15 @@ def main() -> None:
         # ── 背景緒 ──
         road = RoadAnalyzer(road_type, asphalt, cement)
         det = DetectorThread(detector, zone, cfg.detect, W, H)
+        door = DoorThread(door_detector, W, H)
         road.start()
         det.start()
+        door.start()
 
         if not args.no_save:
             recorder = SegmentRecorder(cfg.output)
+        logger = EventLogger(cfg.output)
+        det_classes = list(cfg.detect.classes.values())
 
         fps_shown = 0.0
         t_start = last_t = time.perf_counter()
@@ -171,13 +190,17 @@ def main() -> None:
                     "crack_ms": cement.crack_detector.last_ms if mode == "cement" else None,
                     "det_round_ms": det.last_ms,
                     "yolo_infer_ms": yolo_model.last_ms,
+                    "door_round_ms": door.last_ms,
+                    "door_infer_ms": door_model.last_ms,
+                    "door_state": dr.state if (dr := door.latest()) else None,
                     **loop_ms,
                     "recording": 1 if recorder else 0,
                     "hailo_temp": dev.chip_temperature(),
                 }
             metrics = MetricsRecorder(cfg.metrics, _app_stats,
                                       {"resnet": resnet.name, "asphalt": asphalt_model.name,
-                                       "cement": cement_model.name, "yolo": yolo_model.name})
+                                       "cement": cement_model.name, "yolo": yolo_model.name,
+                                       "door": door_model.name})
             metrics.start()
             print(f"指標取樣中（每 {cfg.metrics.interval:g} 秒）→ {metrics.csv_path}")
 
@@ -193,11 +216,12 @@ def main() -> None:
                 break
             frame, lores = got
 
-            # 兩條分析緒都只留最新一幀。roi_crop 要 copy：frame 之後會被畫圖覆寫，
-            # 而分析緒可能還在用；lores 是這次 read() 新建的陣列，可直接交出去
+            # 三條分析緒都只留最新一幀。roi_crop 要 copy：frame 之後會被畫圖覆寫，
+            # 而分析緒可能還在用；lores 是這次 read() 新建的陣列，兩條偵測緒都只讀不寫，可共用同一份
             roi_crop = frame[ry1:ry2, rx1:rx2]
             road.submit(roi_crop.copy())
             det.submit(lores)
+            door.submit(lores)
 
             # 路面：網格疊回 ROI，白框標出分析範圍
             t_draw = time.perf_counter()
@@ -211,17 +235,25 @@ def main() -> None:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
 
             # 人車：偵測框、軌跡、預測點、警戒區、警報
-            renderer.draw(frame, det.latest(), zone.get())
+            det_res = det.latest()
+            renderer.draw(frame, det_res, zone.get())
+
+            # 車門：開啟紅框、關閉綠框（狀態併進左上角狀態列）
+            dr = door.latest()
+            draw_doors(frame, dr)
 
             now = time.perf_counter()
             if now - last_t >= 1.0:
                 fps_shown = (frame_idx - last_n) / (now - last_t)
                 last_t, last_n = now, frame_idx
-            _draw_status(frame, fps_shown, road, det, rr)
+            _draw_status(frame, fps_shown, road, det, door, rr, dr)
             t_write = time.perf_counter()
 
             if recorder:
                 recorder.write(frame)
+            # 放在 recorder.write 之後：錄影剛切新檔時，log 用的是新檔名
+            logger.update(snapshot(rr, det_res, dr, det_classes), time.time(),
+                          (recorder.path.stem, recorder.seg_start) if recorder else None)
             t_show = time.perf_counter()
             key = -1
             if show:
@@ -243,16 +275,18 @@ def main() -> None:
         interrupted = True
         print("\n偵測到中斷，正在收尾存檔...")
     finally:
-        # 順序很重要：先停取樣緒（它會讀 Hailo 溫度）與兩條分析緒（它們還在用 Hailo），
+        # 順序很重要：先停取樣緒（它會讀 Hailo 溫度）與三條分析緒（它們還在用 Hailo），
         # 再收 writer（moov 在 release 時才寫），關相機，最後才釋放 Hailo
-        for t in (metrics, road, det):
+        for t in (metrics, road, det, door):
             if t:
                 t.stop()
-        for t in (metrics, road, det):
+        for t in (metrics, road, det, door):
             if t:
                 t.join(timeout=5)
         if recorder:
             recorder.close()
+        if logger:
+            logger.close()
         if cam:
             cam.close()
         dev.close()
@@ -263,9 +297,12 @@ def main() -> None:
     avg = frame_idx / elapsed if elapsed > 0 else 0
     print(f"{'已中斷。' if interrupted else ''}共 {frame_idx} 幀 / {elapsed:.0f} 秒（平均 {avg:.1f} fps）"
           + (f"，路面分析 {road.update_count} 次、切換 {road.switches} 次" if road else "")
-          + (f"，偵測 {det.update_count} 次" if det else ""))
+          + (f"，偵測 {det.update_count} 次" if det else "")
+          + (f"，車門偵測 {door.update_count} 次" if door else ""))
     if recorder:
         print(f"錄影輸出到: {cfg.output.dir}")
+    if logger:
+        print(f"偵測結果 log：{logger.records} 筆 → {cfg.output.log_dir}")
     if metrics:
         print()
         print(metrics.summary())

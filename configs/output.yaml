@@ -1,4 +1,4 @@
-# 畫面與錄影
+# 畫面、錄影與偵測結果 log
 
 dir: outputs            # 錄影輸出資料夾
 segment_seconds: 60     # 每幾秒切一段；檔名為開始時間 YYYYMMDD_HHMMSS.mp4
@@ -7,3 +7,8 @@ codec: mp4v             # OpenCV 這裡沒有 H.264，只有 mp4v / XVID / MJPG 
 
 # 視窗標題必須是 ASCII（OpenCV 5 的 Qt 後端用名稱查視窗，中文會找不到而崩潰）
 window_title: "Road Integration (q=quit | drag=warning zone | r=reset tracks)"
+
+# 偵測結果 log（JSON Lines，每行一筆）：路面種類、網格各等級格數、各類人車數量、車門狀態。
+# 只在狀態改變時記一筆；跟錄影同名、同樣每 segment_seconds 秒一檔（--no-save 時照記）。
+log_dir: outputs/logs
+log_stable_sec: 0.5     # 新狀態要穩定維持幾秒才算改變，濾掉偵測漏抓一兩幀造成的閃動。0 = 任何變化立刻記

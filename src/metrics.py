@@ -35,7 +35,7 @@ from .settings import MetricsSettings
 # PMIC 電源軌（vcgencmd pmic_read_adc 的名稱去掉 _A / _V 後綴）。EXT5V 只有電壓、沒有電流，另外記
 PMIC_RAILS = ["VDD_CORE", "0V8_SW", "1V1_SYS", "1V8_SYS", "3V3_SYS", "DDR_VDD2", "DDR_VDDQ",
               "3V7_WL_SW", "0V8_AON", "HDMI", "3V3_ADC", "3V3_DAC"]
-HAILO_MODELS = ["resnet", "asphalt", "cement", "yolo"]
+HAILO_MODELS = ["resnet", "asphalt", "cement", "yolo", "door"]
 N_CPU = 4
 
 COLUMNS = (
@@ -47,7 +47,7 @@ COLUMNS = (
        "hailo_util", "hailo_temp"]
     + [f"{m}_{k}" for m in HAILO_MODELS for k in ("util", "fps")]
     + ["fps", "road_mode", "road_label", "road_round_ms", "resnet_infer_ms", "grade_infer_ms", "crack_ms",
-       "det_round_ms", "yolo_infer_ms", "draw_ms", "write_ms", "show_ms", "recording",
+       "det_round_ms", "yolo_infer_ms", "door_round_ms", "door_infer_ms", "door_state", "draw_ms", "write_ms", "show_ms", "recording",
        "est_hailo_w", "est_camera_w", "est_fan_w", "est_total_w"]
 )
 
@@ -536,6 +536,7 @@ def summarize(rows: list[dict], csv_path: Path | None = None, throttled_start: i
     L.append(f"  路面分析緒每輪 {ms('road_round_ms')}（ResNet 推論 {ms('resnet_infer_ms')}、"
              f"分級推論 {ms('grade_infer_ms')}、裂縫偵測 {ms('crack_ms')}）")
     L.append(f"  偵測緒每輪 {ms('det_round_ms')}（YOLO 推論 {ms('yolo_infer_ms')}）")
+    L.append(f"  車門緒每輪 {ms('door_round_ms')}（YOLOv11m 推論 {ms('door_infer_ms')}）")
     L.append(f"  主緒每幀：疊圖 {ms('draw_ms')}、寫檔 {ms('write_ms')}、顯示 {ms('show_ms')}")
     rec = _num(rows, "recording")
     if rec:

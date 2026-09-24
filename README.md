@@ -1,6 +1,6 @@
 # 路面辨識整合系統
 
-把桌面上四個專案整合成**一個程序、一顆鏡頭、一顆 Hailo-8**：
+把桌面上五個專案整合成**一個程序、一顆鏡頭、一顆 Hailo-8**：
 
 | 來源專案 | 在這裡的角色 | 模型 |
 |---|---|---|
@@ -8,10 +8,11 @@
 | `asphalt` | 瀝青路：3×5 網格劣化分級（紅/黃/綠） | `asphalt_cls.hef` |
 | `cement` | 水泥路：3×5 網格分級 × 影像法裂縫定位 融合 | `cement_cls.hef` + CPU 裂縫偵測 |
 | `OverlayView` | 人車偵測 + Kalman 追蹤 + 警戒區警報 | `yolov8n.hef` |
+| `car_door` | 車門開啟 / 關閉偵測 | `car_door_yolov11m.hef`（closed / open） |
 
 流程：ResNet 判成 **Asphalt Road** → 跑 asphalt 分級；**Concrete road** → 跑 cement 分級；
 Belgian Block / Forest Road 本來就不平整 → 只顯示種類、不畫網格。
-人車偵測與警戒區同時跑在整張畫面上。全部疊在一個 1280×720 畫面，即時顯示並每分鐘存一段。
+人車偵測與警戒區、車門偵測同時跑在整張畫面上（車門開啟紅框、關閉綠框，狀態顯示在左上角狀態列，不發警報）。全部疊在一個 1280×720 畫面，即時顯示並每分鐘存一段。
 
 硬體：Raspberry Pi 5 + Hailo-8 AI HAT + IMX219 Stereo Camera（兩顆朝同一方向、倒裝；目前只用 cam0）。
 
@@ -54,7 +55,8 @@ uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階�
 | [`asphalt.yaml`](configs/asphalt.yaml) | asphalt | 模型、類別名、網格、EMA 平滑與遲滯 |
 | [`cement.yaml`](configs/cement.yaml) | cement | 模型、類別名、網格、裂縫參數檔、融合權重、PID / EMA 平滑 |
 | [`detect.yaml`](configs/detect.yaml) | OverlayView | YOLO 模型、信心門檻、保留類別、追蹤器、警戒區檔與預設 |
-| [`output.yaml`](configs/output.yaml) | — | 輸出資料夾、分段秒數、錄影 fps、視窗標題 |
+| [`door.yaml`](configs/door.yaml) | car_door | 車門模型、分數門檻、類別名稱順序、哪些類別算開啟 |
+| [`output.yaml`](configs/output.yaml) | — | 輸出資料夾、分段秒數、錄影 fps、視窗標題、偵測結果 log 資料夾與防閃動秒數 |
 | [`metrics.yaml`](configs/metrics.yaml) | — | 指標取樣開關、間隔、輸出資料夾、Hailo / 相機 / 風扇的估算參數與 DC-DC 效率 |
 
 ### 路面種類切換的遲滯
@@ -69,6 +71,30 @@ uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階�
 
 `outputs/20260915_160140.mp4`（該段開始時間命名，每 60 秒一段，可在 `output.yaml` 改）。
 錄的就是螢幕上看到的合併畫面。依牆上時鐘補幀/丟幀，處理變慢時播放速度仍與真實時間一致。
+
+### 偵測結果 log
+
+`outputs/logs/20260915_160140.jsonl`：跟同名的 mp4 對應，同時切檔（`--no-save` 時照記，自己每 60 秒切一檔）。
+JSON Lines，每行一筆，**只在狀態改變時記**：
+
+| 欄位 | 內容 |
+|---|---|
+| `time` / `offset_sec` | 改變開始的時間 / 距該段影片開頭幾秒（可直接拿去影片裡找） |
+| `event` | `segment_start`（每檔第一行，記當下完整狀態）或 `change` |
+| `changed` | 這次改變的欄位 |
+| `road` / `road_conf` | 路面種類 / 寫入當下的信心（信心變動不觸發紀錄） |
+| `grading` | `asphalt` / `cement` / `none` |
+| `grid` | 網格各等級格數 `{"severe", "slight", "smooth"}`；不分級的路面為 `{}` |
+| `objects` | 各類人車數量（`detect.yaml` 的 classes） |
+| `door` | 車門 `open` / `closed` / `none` |
+
+防閃動：新值要穩定維持 `output.yaml` 的 `log_stable_sec`（預設 0.5 秒）才算改變，
+偵測漏抓一兩幀不會被記；`time` 記的是新值開始出現的時間。
+
+```bash
+# 例：列出這段影片裡車門開啟的時間點
+grep '"door": "open"' outputs/logs/20260923_161122.jsonl | grep '"changed": \[[^]]*door'
+```
 
 ---
 
@@ -91,7 +117,7 @@ uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階�
 | **估算** 整套 | `(board_w + Hailo + 相機 + 風扇) / efficiency` | `est_total_w`；報告時請註明估算部分與參數 |
 
 另外每列也記 CPU 各核使用率、記憶體、顯示 fps、路面模式、各階段耗時
-（ResNet / 分級 / 裂縫偵測 / YOLO 推論、主緒疊圖 / 寫檔 / 顯示），方便把功耗曲線對到程式狀態。
+（ResNet / 分級 / 裂縫偵測 / YOLO / 車門推論、主緒疊圖 / 寫檔 / 顯示），方便把功耗曲線對到程式狀態。
 要看穩態，建議至少跑 10～15 分鐘讓溫度穩定。
 
 ---
@@ -101,7 +127,7 @@ uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階�
 ```
 main.py                 進入點：讀設定、載模型、開鏡頭、主迴圈（疊圖 / 顯示 / 錄影）
 configs/                各專案的設定檔
-models/                 四個 .hef；resnet/ 另含 config.json、classes.txt
+models/                 五個 .hef；resnet/ 另含 config.json、classes.txt
 presets/                rough.json / smooth.json / pid.json（複製自 cement）
                         roi.json / warning_zone.json（程式自動產生）
 src/
@@ -112,7 +138,9 @@ src/
   road_type.py          ResNet 前處理（自 road_classification）+ 機率平滑 + 連續確認切換
   analyzer.py           路面分析緒：ResNet → asphalt / cement 分級
   detect.py             YOLO NMS 解析、Kalman、追蹤、警戒區（可存檔）、警報、偵測緒、繪製（自 OverlayView）
+  door.py               車門 YOLOv11m NMS 解析、車門緒、繪製（自 car_door）
   recorder.py           分段錄影（自 OverlayView，時間戳命名）
+  event_log.py          偵測結果 log（狀態改變才記、防閃動、跟錄影同名切檔）
   draw.py               OpenCV 5 相容的描邊文字
   grading/
     graders.py          AsphaltGrader / CementGrader 統一介面 + GridClassifier
@@ -121,7 +149,7 @@ src/
 ```
 
 執行緒：主緒讀相機、疊圖、顯示、錄影，維持相機幀率、從不等 Hailo；
-路面分析緒與偵測緒各自只處理「最新的一幀」，來不及就丟，主緒拿最近一次結果填補。
+路面分析緒、偵測緒與車門緒各自只處理「最新的一幀」，來不及就丟，主緒拿最近一次結果填補。
 
 ---
 
@@ -136,6 +164,20 @@ src/
 | yolov8n | ~7 ms（含追蹤 ~10 ms/輪） |
 
 四個 HEF 放在同一個 VDevice，由 HailoRT scheduler 輪流排程。
+
+### 加入車門偵測後（2026-09-23 實測）
+
+`car_door_yolov11m.hef` 是 multi-context（4 段），單獨跑 38.6 ms/幀。與其他模型共用 Hailo 時，
+round-robin scheduler 會平分晶片時間，其他分析緒的更新頻率明顯下降（各緒不限速、同時全速跑的量測）：
+
+| | 不加車門 | 車門全速（目前設定） | 車門限 10 次/秒 | 車門限 5 次/秒 |
+|---|---|---|---|---|
+| 人車偵測 yolov8n | 32.6 次/秒 | 14.1 | 19.4 | 25.9 |
+| 路面分析（ResNet + asphalt 15 格） | 10.9 次/秒 | 4.7 | 6.5 | 8.7 |
+| 車門偵測 | — | 14.1 | 10 | 5 |
+
+實機（asphalt 模式、錄影、`--no-display`）：顯示 / 錄影 24.9 fps 不受影響，人車與車門各約 13 次/秒，
+路面分析約 4.6 次/秒（每輪 ~207 ms），Hailo 使用率 ~93%。
 
 ---
 
@@ -163,8 +205,9 @@ uv sync
   OverlayView 的 `cv2.flip(-1)` 改由 ISP `rotation` 處理。
 - **網格**：cement 由 4×10 統一為 3×5。
 - **警戒區**：OverlayView 原本只在記憶體裡，改為存 json 自動沿用。
+- **車門偵測**：car_door 原本自己開 VDevice、從 BGR 畫面 letterbox 到 640×640；這裡改走共用 VDevice，輸入直接共用人車偵測的 lores 640×640（16:9 拉伸成正方形，與原專案的 letterbox 比例不同）。類別順序 `[closed, open]` 沿用原專案的假設、**尚未驗證**，見 `door.yaml`。
 - **描邊文字**：OpenCV 5.0 的 `putText` 字距隨 thickness 改變，原專案「粗黑字 + 細白字」的描邊會錯開成兩層；
   這裡改用同 thickness 偏移描邊（`src/draw.py`）。**原四個專案在 OpenCV 5 上也有同樣現象**，未動。
 - 一台 Hailo-8 同時只能被一個程序開啟；若原專案有程式在跑，這裡會出現 `HAILO_OUT_OF_PHYSICAL_DEVICES`。
 
-原四個專案與 `imx_video/` 未做任何修改。
+原五個專案與 `imx_video/` 未做任何修改。

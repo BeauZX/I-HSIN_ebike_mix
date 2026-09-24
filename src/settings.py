@@ -6,7 +6,8 @@
     asphalt.yaml    瀝青分級
     cement.yaml     水泥分級 + 裂縫
     detect.yaml     人車偵測 / 追蹤 / 警戒區
-    output.yaml     畫面與錄影
+    door.yaml       車門開啟 / 關閉偵測
+    output.yaml     畫面、錄影與偵測結果 log
     metrics.yaml    系統指標取樣（功耗 / 頻率 / 降頻）與估算參數
 
 設定檔裡的相對路徑一律相對於專案根目錄，在哪個目錄下執行都一樣。
@@ -116,12 +117,22 @@ class DetectSettings:
 
 
 @dataclass
+class DoorSettings:
+    hef: Path
+    conf: float
+    class_names: list[str]
+    open_classes: list[str]
+
+
+@dataclass
 class OutputSettings:
     dir: Path
     segment_seconds: float
     fps: float
     codec: str
     window_title: str
+    log_dir: Path
+    log_stable_sec: float
 
 
 @dataclass
@@ -150,6 +161,7 @@ class Settings:
     asphalt: AsphaltSettings
     cement: CementSettings
     detect: DetectSettings
+    door: DoorSettings
     output: OutputSettings
     metrics: MetricsSettings
     config_dir: Path = field(default=DEFAULT_CONFIG_DIR)
@@ -257,6 +269,20 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
     if not detect.classes:
         raise SettingsError("detect.yaml 的 classes 不能是空的")
 
+    # ── door ──
+    dr = _load_yaml(config_dir / "door.yaml")
+    door = DoorSettings(
+        hef=_require_file(_resolve(dr.get("hef", "models/car_door_yolov11m.hef")), "車門 HEF", "door.yaml"),
+        conf=float(dr.get("conf", 0.4)),
+        class_names=[str(n) for n in dr.get("class_names", [])],
+        open_classes=[str(n) for n in dr.get("open_classes", ["open"])],
+    )
+    if not door.class_names:
+        raise SettingsError("door.yaml 缺 class_names（HEF 裡沒有類別名稱）")
+    bad = set(door.open_classes) - set(door.class_names)
+    if bad:
+        raise SettingsError(f"door.yaml 的 open_classes 不在 class_names 裡: {bad}")
+
     # ── output ──
     o = _load_yaml(config_dir / "output.yaml")
     output = OutputSettings(
@@ -265,7 +291,11 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
         fps=float(o.get("fps", camera.fps)),
         codec=str(o.get("codec", "mp4v")),
         window_title=str(o.get("window_title", "Road Integration")),
+        log_dir=_resolve(o.get("log_dir", "outputs/logs")),
+        log_stable_sec=float(o.get("log_stable_sec", 0.5)),
     )
+    if output.log_stable_sec < 0:
+        raise SettingsError("output.yaml 的 log_stable_sec 不能是負的")
     if output.segment_seconds <= 0:
         raise SettingsError("output.yaml 的 segment_seconds 必須大於 0")
     if not output.window_title.isascii():
@@ -299,4 +329,4 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
     if not 0 < metrics.hat_efficiency <= 1:
         raise SettingsError("metrics.yaml 的 estimate.hat_efficiency 必須在 0~1 之間")
 
-    return Settings(camera, road_type, asphalt, cement, detect, output, metrics, config_dir)
+    return Settings(camera, road_type, asphalt, cement, detect, door, output, metrics, config_dir)

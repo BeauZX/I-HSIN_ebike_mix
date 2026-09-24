@@ -3,6 +3,7 @@
     grader.analyze(roi_bgr) -> result      在分析緒呼叫（含該管線自己的時序平滑）
     grader.draw(roi_bgr, result) -> vis    在主緒呼叫，把結果畫到 ROI 副本上
     grader.reset()                          路面種類切換時清掉平滑狀態，不讓舊路面的記憶拖累新路面
+    grader.grade_counts(result) -> dict     各等級格數 {"severe": n, "slight": n, "smooth": n}（給 log 用）
     grader.rows / grader.cols
 
 GridClassifier 取代 asphalt / cement 原本的 HailoClassifier：前處理一字不改
@@ -26,6 +27,8 @@ from .fusion import FrameResult, FusionConfig, analyze_frame
 from .overlay import draw_overlay
 from .pothole.crack import CrackDetector
 from .presets import load_crack_config
+
+GRADE_NAMES = ("severe", "slight", "smooth")     # 兩個分級管線統一回報的等級名稱
 
 
 class GridClassifier:
@@ -93,6 +96,16 @@ class AsphaltGrader:
     def draw(self, roi_bgr: np.ndarray, result) -> np.ndarray:
         return asphalt_grid.draw_grid_overlay(roi_bgr.copy(), result, self.rows, self.cols)
 
+    def grade_counts(self, result) -> dict[str, int]:
+        # 類別名稱像 dry_asphalt_severe，依字尾歸到 severe / slight / smooth
+        counts = dict.fromkeys(GRADE_NAMES, 0)
+        for row in result:
+            for _, name, _ in row:
+                grade = next((g for g in GRADE_NAMES if g in name.lower()), None)
+                if grade:
+                    counts[grade] += 1
+        return counts
+
 
 class CementGrader:
     name = "cement"
@@ -136,3 +149,8 @@ class CementGrader:
     def draw(self, roi_bgr: np.ndarray, result) -> np.ndarray:
         frame_result, level = result
         return draw_overlay(roi_bgr, frame_result, level=level)
+
+    def grade_counts(self, result) -> dict[str, int]:
+        _, level = result       # 0 / 1 / 2 = smooth / slight / severe（yolo_grid.SEVERITY_NAMES）
+        level_of = {name: lv for lv, name in yolo_grid.SEVERITY_NAMES.items()}
+        return {g: int(np.count_nonzero(level == level_of[g])) for g in GRADE_NAMES}
