@@ -48,6 +48,7 @@ class FrameResult:
     crack_ratio: np.ndarray    # [rows, cols] 格內裂縫像素比
     cracks: list[tuple[np.ndarray, Detection]]  # (ROI 座標輪廓, Detection)
     names: dict
+    roi_size: tuple[int, int]  # 分析時的 ROI (寬, 高)；畫到不同大小的 ROI 上時用來縮放裂縫輪廓
 
 
 def _detector_scale(detector: CrackDetector, h: int, w: int) -> tuple[float, float]:
@@ -127,4 +128,5 @@ def analyze_frame(
         crack_ratio=crack_ratio,
         cracks=kept,
         names=names,
+        roi_size=(w, h),
     )

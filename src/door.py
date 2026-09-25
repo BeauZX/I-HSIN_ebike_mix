@@ -2,8 +2,8 @@
 
 改動：
     * 推論改走共用的 HailoModel（同一個 VDevice、scheduler 排程），不再自己開 VDevice。
-    * 輸入共用人車偵測的 lores 640×640 RGB 串流（ISP 已縮放），不做 letterbox；
-      因此框座標直接用 0~1 比例換回 main 串流，與 detect.py 的 HailoDetector 相同。
+    * 輸入共用人車偵測的 640×640 RGB（Camera.read() 從顯示畫面拉伸縮放），不做 letterbox；
+      因此框座標直接用 0~1 比例換回顯示畫面，與 detect.py 的 HailoDetector 相同。
     * 偵測搬到背景緒（DoorThread），只處理最新一幀、全速跑；主緒只拿最新結果畫圖。
     * 類別名稱與「哪些類別算開啟」改由 configs/door.yaml 指定（原本是 sidecar json + 關鍵字比對）。
     * 狀態不另畫橫幅，併進 main.py 左上角的狀態列；框上的標籤改用描邊文字（OpenCV 5 相容）。

@@ -34,6 +34,7 @@ def draw_overlay(
     """把融合結果畫到 ROI 副本上並回傳。
 
     level：可傳入時序平滑後的分級覆寫 result.final_level（影片用）。
+    roi_bgr 可以和分析時的 ROI 不同大小（例如 1080p 分析、720p 顯示），裂縫輪廓會依比例縮放。
     """
     lvl = result.final_level if level is None else level
     rows, cols = lvl.shape
@@ -53,7 +54,11 @@ def draw_overlay(
     cv2.addWeighted(overlay, alpha, vis, 1 - alpha, 0, vis)
 
     # 裂縫輪廓畫在網格之上（精準定位）
+    src_w, src_h = result.roi_size
+    scale = None if (src_w, src_h) == (w, h) else np.array([w / src_w, h / src_h], np.float32)
     for cnt, det in result.cracks:
+        if scale is not None:
+            cnt = (cnt * scale).astype(np.int32)
         cv2.drawContours(vis, [cnt], -1, _CRACK_COLORS.get(det.label, (0, 255, 0)), 2)
 
     if show_text:

@@ -1,8 +1,8 @@
 """人車偵測 + Kalman 追蹤 + 警戒區 + 警報（複製自 OverlayView 專案 OverayView.py，改動處見各段註解）。
 
 改動：
-    * HailoDetector 改走共用的 HailoModel，輸入直接吃鏡頭 lores 串流（ISP 已縮成 640×640 RGB），
-      不再自己 cvtColor + resize。
+    * HailoDetector 改走共用的 HailoModel，輸入直接吃 Camera.read() 備好的 640×640 RGB
+      （ISP 出的顯示畫面再縮一次），不再自己 cvtColor + resize。
     * 警戒區改存 0~1 比例到 json（放開滑鼠即存），下次自動沿用；原版關掉就沒了。
     * 偵測與追蹤搬到背景緒（DetectorThread），主緒只拿最新結果畫圖，不等 Hailo。
     * 畫面翻轉改由 ISP 處理（camera.yaml rotation），拿掉 cv2.flip。

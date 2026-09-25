@@ -2,9 +2,11 @@
 # 曝光組合沿用 asphalt 專案在 rpicam-vid 上實測過的設定，這裡改以 libcamera control 指定，效果相同。
 
 index: 0            # 用哪顆鏡頭（rpicam-hello --list-cameras 的編號）。立體板兩顆朝同一方向，先只用 cam0
-width: 1280
-height: 720
-fps: 25             # 實測值：Pi 5 上 720p 邊錄邊分析大約就是這個上限
+width: 3280         # 擷取解析度：IMX219 原生全幅（4:3），路面 ROI 從這張原圖裁切去分析
+height: 2464        # 顯示與錄影另外縮成 output.yaml 的 width/height（長寬比要相同）。
+                    # 注意視野：720p / 1080p 走感測器中央裁切的 1920×1080 模式，原生是全幅，畫面寬很多；
+                    # 在這兩類解析度之間切換後，要加 --ui 重新框選路面 ROI 與警戒區
+fps: 21             # 原生全幅模式感測器上限 21.19 fps（1080p 以下的模式可到 25 以上）
 rotation: 0       # 0 或 180。鏡頭倒裝時設 180，由 ISP 翻轉（hflip+vflip），不耗 CPU
                     # 改了這個要加 --ui 重新框選路面 ROI 與警戒區
 

@@ -126,6 +126,8 @@ class DoorSettings:
 
 @dataclass
 class OutputSettings:
+    width: int              # 顯示與錄影的畫面尺寸（相機擷取尺寸在 CameraSettings）
+    height: int
     dir: Path
     segment_seconds: float
     fps: float
@@ -286,6 +288,8 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
     # ── output ──
     o = _load_yaml(config_dir / "output.yaml")
     output = OutputSettings(
+        width=int(o.get("width", camera.width)),
+        height=int(o.get("height", camera.height)),
         dir=_resolve(o.get("dir", "outputs")),
         segment_seconds=float(o.get("segment_seconds", 60)),
         fps=float(o.get("fps", camera.fps)),
@@ -294,6 +298,13 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
         log_dir=_resolve(o.get("log_dir", "outputs/logs")),
         log_stable_sec=float(o.get("log_stable_sec", 0.5)),
     )
+    if output.width < 1 or output.height < 1:
+        raise SettingsError("output.yaml 的 width / height 必須大於 0")
+    # 容許 1% 誤差：IMX219 原生 3280×2464 不是精確的 4:3（縮成 1280×960 差 0.16%，看不出變形）
+    aspect_err = (output.width / output.height) / (camera.width / camera.height) - 1
+    if abs(aspect_err) > 0.01:
+        raise SettingsError(f"output.yaml 的畫面 {output.width}×{output.height} 與相機 "
+                            f"{camera.width}×{camera.height} 長寬比不同，縮放會變形")
     if output.log_stable_sec < 0:
         raise SettingsError("output.yaml 的 log_stable_sec 不能是負的")
     if output.segment_seconds <= 0:

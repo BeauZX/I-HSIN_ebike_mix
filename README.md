@@ -12,7 +12,7 @@
 
 流程：ResNet 判成 **Asphalt Road** → 跑 asphalt 分級；**Concrete road** → 跑 cement 分級；
 Belgian Block / Forest Road 本來就不平整 → 只顯示種類、不畫網格。
-人車偵測與警戒區、車門偵測同時跑在整張畫面上（車門開啟紅框、關閉綠框，狀態顯示在左上角狀態列，不發警報）。全部疊在一個 1280×720 畫面，即時顯示並每分鐘存一段。
+人車偵測與警戒區、車門偵測同時跑在整張畫面上（車門開啟紅框、關閉綠框，狀態顯示在左上角狀態列，不發警報）。全部疊在一個 1280×960 畫面（相機以原生 3280×2464 全幅擷取，最高約 21 fps；路面 ROI 從原圖裁切分析，顯示與錄影再縮小），即時顯示並每分鐘存一段。
 
 硬體：Raspberry Pi 5 + Hailo-8 AI HAT + IMX219 Stereo Camera（兩顆朝同一方向、倒裝；目前只用 cam0）。
 
@@ -50,13 +50,13 @@ uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階�
 
 | 檔案 | 對應專案 | 主要內容 |
 |---|---|---|
-| [`camera.yaml`](configs/camera.yaml) | — | 鏡頭編號、解析度、fps、`rotation`、曝光組合（`exposure` / `awb` / `denoise`，沿用 asphalt 實測值） |
+| [`camera.yaml`](configs/camera.yaml) | — | 鏡頭編號、擷取解析度（路面分析用；顯示/錄影尺寸在 `output.yaml`）、fps、`rotation`、曝光組合（`exposure` / `awb` / `denoise`，沿用 asphalt 實測值） |
 | [`road_type.yaml`](configs/road_type.yaml) | road_classification | ResNet 模型、`grading`（類別 → 分級模式）、`smooth_window`、`confirm_count`（切換遲滯）、共用 ROI 檔 |
 | [`asphalt.yaml`](configs/asphalt.yaml) | asphalt | 模型、類別名、網格、EMA 平滑與遲滯 |
 | [`cement.yaml`](configs/cement.yaml) | cement | 模型、類別名、網格、裂縫參數檔、融合權重、PID / EMA 平滑 |
 | [`detect.yaml`](configs/detect.yaml) | OverlayView | YOLO 模型、信心門檻、保留類別、追蹤器、警戒區檔與預設 |
 | [`door.yaml`](configs/door.yaml) | car_door | 車門模型、分數門檻、類別名稱順序、哪些類別算開啟 |
-| [`output.yaml`](configs/output.yaml) | — | 輸出資料夾、分段秒數、錄影 fps、視窗標題、偵測結果 log 資料夾與防閃動秒數 |
+| [`output.yaml`](configs/output.yaml) | — | 顯示與錄影畫面尺寸、輸出資料夾、分段秒數、錄影 fps、視窗標題、偵測結果 log 資料夾與防閃動秒數 |
 | [`metrics.yaml`](configs/metrics.yaml) | — | 指標取樣開關、間隔、輸出資料夾、Hailo / 相機 / 風扇的估算參數與 DC-DC 效率 |
 
 ### 路面種類切換的遲滯
@@ -133,7 +133,7 @@ presets/                rough.json / smooth.json / pid.json（複製自 cement�
 src/
   settings.py           讀 configs/*.yaml 並驗證
   hailo.py              共用 VDevice（scheduler）+ HailoModel 包裝（run_async 多張並排）
-  camera.py             Picamera2：main 720p BGR + lores 640×640 RGB（給 YOLO），ISP 翻轉與曝光控制
+  camera.py             Picamera2：main 3280×2464 BGR（只複製路面 ROI）+ lores 1280×960 BGR（顯示/錄影，再縮成 640×640 RGB 給 YOLO），ISP 翻轉與曝光控制
   roi.py                路面 ROI 框選與存讀（自 asphalt）
   road_type.py          ResNet 前處理（自 road_classification）+ 機率平滑 + 連續確認切換
   analyzer.py           路面分析緒：ResNet → asphalt / cement 分級
@@ -205,7 +205,7 @@ uv sync
   OverlayView 的 `cv2.flip(-1)` 改由 ISP `rotation` 處理。
 - **網格**：cement 由 4×10 統一為 3×5。
 - **警戒區**：OverlayView 原本只在記憶體裡，改為存 json 自動沿用。
-- **車門偵測**：car_door 原本自己開 VDevice、從 BGR 畫面 letterbox 到 640×640；這裡改走共用 VDevice，輸入直接共用人車偵測的 lores 640×640（16:9 拉伸成正方形，與原專案的 letterbox 比例不同）。類別順序 `[closed, open]` 沿用原專案的假設、**尚未驗證**，見 `door.yaml`。
+- **車門偵測**：car_door 原本自己開 VDevice、從 BGR 畫面 letterbox 到 640×640；這裡改走共用 VDevice，輸入直接共用人車偵測的 640×640（4:3 全幅畫面拉伸成正方形，與原專案的 letterbox 比例不同）。類別順序 `[closed, open]` 沿用原專案的假設、**尚未驗證**，見 `door.yaml`。
 - **描邊文字**：OpenCV 5.0 的 `putText` 字距隨 thickness 改變，原專案「粗黑字 + 細白字」的描邊會錯開成兩層；
   這裡改用同 thickness 偏移描邊（`src/draw.py`）。**原四個專案在 OpenCV 5 上也有同樣現象**，未動。
 - 一台 Hailo-8 同時只能被一個程序開啟；若原專案有程式在跑，這裡會出現 `HAILO_OUT_OF_PHYSICAL_DEVICES`。

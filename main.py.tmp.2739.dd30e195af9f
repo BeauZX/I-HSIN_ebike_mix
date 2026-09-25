@@ -54,6 +54,29 @@ def _draw_status(frame, fps_shown, road, det, door, rr, dr) -> None:
     put_text_outlined(frame, text, (10, 24), 0.6)
 
 
+class _ErrorReporter:
+    """主緒的疊圖 / log 摘要出錯時印訊息，錄影照常繼續。
+    第一次附完整 traceback 方便查；之後同一處每 interval 秒最多印一次，免得每幀洗版。"""
+
+    def __init__(self, interval: float = 5.0):
+        self.interval = interval
+        self._last: dict[str, float] = {}
+        self._suppressed: dict[str, int] = {}
+
+    def report(self, where: str, e: Exception) -> None:
+        now = time.monotonic()
+        last = self._last.get(where)
+        if last is not None and now - last < self.interval:
+            self._suppressed[where] = self._suppressed.get(where, 0) + 1
+            return
+        n = self._suppressed.pop(where, 0)
+        extra = f"（上次訊息後又發生 {n} 次）" if n else ""
+        print(f"[{where}] 失敗，這一幀略過，錄影繼續{extra}: {e!r}", file=sys.stderr, flush=True)
+        if last is None:
+            traceback.print_exc()
+        self._last[where] = now
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="路面辨識整合系統（路面種類 → 劣化分級 + 人車警戒 + 車門偵測）",
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -122,34 +145,30 @@ def main() -> None:
         cement = CementGrader(cement_model, cfg.cement)
         detector = HailoDetector(yolo_model, cfg.detect)
         door_detector = DoorDetector(door_model, cfg.door)
-        # 車門模型共用人車偵測的 YOLO 輸入，兩個模型的輸入尺寸必須一樣
+        # 車門模型共用人車偵測的 lores 串流，兩個模型的輸入尺寸必須一樣
         if door_detector.input_size != detector.input_size:
             raise RuntimeError(f"車門模型輸入 {door_detector.input_size} 與人車偵測 {detector.input_size} "
-                               "不同，無法共用同一份輸入")
+                               "不同，無法共用 lores 串流")
 
         # ── 鏡頭 ──
-        W, H = cfg.output.width, cfg.output.height
-        cam = Camera(cfg.camera, view_size=(W, H), yolo_size=detector.input_size)
+        cam = Camera(cfg.camera, lores_size=detector.input_size)
         c = cfg.camera
-        print(f"相機 cam{c.index} 已啟動：{c.width}×{c.height} @ {c.fps}fps，顯示/錄影 {W}×{H}，"
-              f"YOLO {detector.input_size}"
+        print(f"相機 cam{c.index} 已啟動：{c.width}×{c.height} @ {c.fps}fps，lores {detector.input_size}"
               f"（曝光 {c.exposure} / 白平衡 {c.awb} / 降噪 {c.denoise} / 旋轉 {c.rotation}°）")
-        first = cam.read_full()
-        if first is None:
+        got = cam.read()
+        if got is None:
             raise RuntimeError(f"讀不到 cam{c.index} 的畫面，請確認鏡頭有接好（rpicam-hello --list-cameras）")
+        first, _ = got
+        W, H = c.width, c.height
 
         # ── 路面 ROI（三個路面模型共用）與警戒區 ──
-        # 路面 ROI 在擷取原圖上框、裁切（分析用原解析度）；疊圖、人車、車門、警戒區都在縮小後的 W×H 座標
         win_w, win_h = cfg.road_type.roi_window_max_w, cfg.road_type.roi_window_max_h
-        cx1, cy1, cx2, cy2 = resolve_roi(first, cfg.road_type.roi_store, camera_key(c.index),
+        rx1, ry1, rx2, ry2 = resolve_roi(first, cfg.road_type.roi_store, camera_key(c.index),
                                          args.ui, win_w, win_h)
-        roi_is_full = (cx1, cy1, cx2, cy2) == (0, 0, c.width, c.height)
-        sx, sy = W / c.width, H / c.height
-        rx1, ry1, rx2, ry2 = round(cx1 * sx), round(cy1 * sy), round(cx2 * sx), round(cy2 * sy)
-        cam.set_roi((cx1, cy1, cx2, cy2))
+        roi_is_full = (rx1, ry1, rx2, ry2) == (0, 0, W, H)
         # 框警戒區時把剛框好的路面 ROI 畫在畫面上當參考（畫在副本，first 之後不再用）
         zone = WarningZone(cfg.detect, W, H)
-        preview = cv2.resize(first, (W, H), interpolation=cv2.INTER_AREA)
+        preview = first.copy()
         if not roi_is_full:
             cv2.rectangle(preview, (rx1, ry1), (rx2, ry2), (255, 255, 255), 1)
         zone.select(preview, args.ui, win_w, win_h)
@@ -218,19 +237,20 @@ def main() -> None:
             if got is None:
                 print("\n相機串流結束（可能是 CSI 排線接觸不良）", file=sys.stderr)
                 break
-            roi_crop, frame, yolo_in = got
+            frame, lores = got
 
-            # 三條分析緒都只留最新一幀。roi_crop（擷取原圖裁切）與 frame（顯示畫面）是分開的新陣列，
-            # 在 frame 上畫圖不影響分析緒；yolo_in 兩條偵測緒都只讀不寫，可共用同一份
-            road.submit(roi_crop)
-            det.submit(yolo_in)
-            door.submit(yolo_in)
+            # 三條分析緒都只留最新一幀。roi_crop 要 copy：frame 之後會被畫圖覆寫，
+            # 而分析緒可能還在用；lores 是這次 read() 新建的陣列，兩條偵測緒都只讀不寫，可共用同一份
+            roi_crop = frame[ry1:ry2, rx1:rx2]
+            road.submit(roi_crop.copy())
+            det.submit(lores)
+            door.submit(lores)
 
             # 路面：網格疊回 ROI，白框標出分析範圍
             t_draw = time.perf_counter()
             rr = road.latest()
             if rr is not None and rr.result is not None:
-                frame[ry1:ry2, rx1:rx2] = rr.grader.draw(frame[ry1:ry2, rx1:rx2], rr.result)
+                frame[ry1:ry2, rx1:rx2] = rr.grader.draw(roi_crop, rr.result)
             if not roi_is_full:
                 cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (255, 255, 255), 1)
             if rr is not None:
