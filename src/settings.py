@@ -125,6 +125,31 @@ class DoorSettings:
 
 
 @dataclass
+class MotorSettings:
+    pin_motor_plus: int
+    pin_motor_minus: int
+    pin_pulse: int
+    pulses_per_rev: int
+    pulse_filter_us: int
+    pos_tight: int
+    pos_mid: int
+    pos_loose: int
+    stop_margin_pulses: int
+    position_tolerance: int
+    brake_time_ms: int
+    move_timeout_ms: int
+    stall_ratio_num: int
+    stall_ratio_den: int
+    min_stall_floor_us: int
+    start_timeout_ms: int
+    stall_timeout_ms: int
+    pothole_severe_cell_threshold: int
+    position_store: Path
+    confirm_count: int
+    min_switch_interval_sec: float
+
+
+@dataclass
 class OutputSettings:
     width: int              # 顯示與錄影的畫面尺寸（相機擷取尺寸在 CameraSettings）
     height: int
@@ -164,6 +189,7 @@ class Settings:
     cement: CementSettings
     detect: DetectSettings
     door: DoorSettings
+    motor: MotorSettings
     output: OutputSettings
     metrics: MetricsSettings
     config_dir: Path = field(default=DEFAULT_CONFIG_DIR)
@@ -285,6 +311,45 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
     if bad:
         raise SettingsError(f"door.yaml 的 open_classes 不在 class_names 裡: {bad}")
 
+    # ── motor ──
+    mo = _load_yaml(config_dir / "motor.yaml")
+    motor = MotorSettings(
+        pin_motor_plus=int(mo.get("pin_motor_plus", 5)),
+        pin_motor_minus=int(mo.get("pin_motor_minus", 6)),
+        pin_pulse=int(mo.get("pin_pulse", 13)),
+        pulses_per_rev=int(mo.get("pulses_per_rev", 692)),
+        pulse_filter_us=int(mo.get("pulse_filter_us", 150)),
+        pos_tight=int(mo.get("pos_tight", 0)),
+        pos_mid=int(mo.get("pos_mid", -280)),
+        pos_loose=int(mo.get("pos_loose", -560)),
+        stop_margin_pulses=int(mo.get("stop_margin_pulses", 1)),
+        position_tolerance=int(mo.get("position_tolerance", 4)),
+        brake_time_ms=int(mo.get("brake_time_ms", 100)),
+        move_timeout_ms=int(mo.get("move_timeout_ms", 5000)),
+        stall_ratio_num=int(mo.get("stall_ratio_num", 17)),
+        stall_ratio_den=int(mo.get("stall_ratio_den", 10)),
+        min_stall_floor_us=int(mo.get("min_stall_floor_us", 100000)),
+        start_timeout_ms=int(mo.get("start_timeout_ms", 500)),
+        stall_timeout_ms=int(mo.get("stall_timeout_ms", 400)),
+        pothole_severe_cell_threshold=int(mo.get("pothole_severe_cell_threshold", 2)),
+        position_store=_resolve(mo.get("position_store", "presets/motor_position.json")),
+        confirm_count=max(1, int(mo.get("confirm_count", 5))),
+        min_switch_interval_sec=float(mo.get("min_switch_interval_sec", 3.0)),
+    )
+    if len({motor.pin_motor_plus, motor.pin_motor_minus, motor.pin_pulse}) != 3:
+        raise SettingsError("motor.yaml 的 pin_motor_plus / pin_motor_minus / pin_pulse 不能重複")
+    if motor.pulses_per_rev <= 0:
+        raise SettingsError("motor.yaml 的 pulses_per_rev 必須大於 0")
+    if not motor.pos_loose <= motor.pos_mid <= motor.pos_tight:
+        raise SettingsError("motor.yaml 的位置必須滿足 pos_loose <= pos_mid <= pos_tight"
+                            f"（目前 {motor.pos_loose} / {motor.pos_mid} / {motor.pos_tight}）")
+    if motor.stall_ratio_num <= 0 or motor.stall_ratio_den <= 0:
+        raise SettingsError("motor.yaml 的 stall_ratio_num / stall_ratio_den 必須大於 0")
+    if motor.pothole_severe_cell_threshold < 0:
+        raise SettingsError("motor.yaml 的 pothole_severe_cell_threshold 不能是負的")
+    if motor.min_switch_interval_sec < 0:
+        raise SettingsError("motor.yaml 的 min_switch_interval_sec 不能是負的")
+
     # ── output ──
     o = _load_yaml(config_dir / "output.yaml")
     output = OutputSettings(
@@ -340,4 +405,4 @@ def load_settings(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> Settings:
     if not 0 < metrics.hat_efficiency <= 1:
         raise SettingsError("metrics.yaml 的 estimate.hat_efficiency 必須在 0~1 之間")
 
-    return Settings(camera, road_type, asphalt, cement, detect, door, output, metrics, config_dir)
+    return Settings(camera, road_type, asphalt, cement, detect, door, motor, output, metrics, config_dir)

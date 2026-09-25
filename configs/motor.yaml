@@ -1,0 +1,71 @@
+# 避震器鎖緊/放鬆馬達控制（改寫自 Arduino 0709_3btn_edge.ino，原本跑在 ESP32 上）
+# 沒有實體按鈕：目標位置完全由路面種類、坑洞（嚴重劣化格數代理）、人員/車門偵測自動決定，
+# 見 src/motor_policy.py 的 decide_target()。
+#
+# ⚠️ 時間相關的門檻（stall_ratio_*、min_stall_floor_us、start_timeout_ms、stall_timeout_ms）是從 ESP32
+# 實測調出來的，Pi 5 跑 Python + lgpio 的中斷延遲遠不如專用微控制器穩定，這幾個值幾乎確定要重新在
+# Pi 上實測調整，不要直接假設沿用沒問題。先用比 ESP32 更保守（寬鬆）的值起跑。
+
+# GPIO 腳位（BCM 編號）
+pin_motor_plus: 5     # M+
+pin_motor_minus: 6    # M-
+pin_pulse: 13          # 編碼器脈衝回饋（CHANGE：上升沿+下降沿都算）
+
+# 一圈脈衝數（CHANGE 雙邊緣偵測，理論上是只抓上升沿的 2 倍；實際請以實機重新量測校正）
+pulses_per_rev: 692
+
+# 脈衝濾波 (us)，避免雜訊/接觸彈跳被誤算成脈衝
+pulse_filter_us: 150
+
+# 三個目標位置（絕對 pulse 數，0 = 全緊/機構死點）
+# 2026-09-25 用 tests/manual_jog.py 實測（tick 濾波後的有效脈衝）：全緊 0 → 全鬆死點約 -197，全程約 3 秒。
+# 原本 ESP32 的 -280 / -560 超過實際行程。全緊、全鬆兩端都是機構死點，目標是兩端時一律轉到堵轉才停並歸零
+# （見 src/motor.py 的 _execute_move），所以 pos_loose 設在死點的計數值；pos_mid 取行程一半。
+# 計數兩個方向有約 10% 漂移（往鬆 197 / 往緊 178 走完同一段），mid 依從哪端過來會差約 10 個脈衝。
+pos_tight: 0
+pos_mid: -98
+pos_loose: -197
+
+# 提前煞車補償：快到目標時提前這麼多 pulse 就煞車（只用在 mid，兩端是轉到堵轉）
+stop_margin_pulses: 1
+
+# 到位容許誤差：跟目標差距在這個範圍內就當作已經到了，不用再修正
+position_tolerance: 4
+
+# 電子煞車時間 (ms)
+brake_time_ms: 100
+
+# 單次動作最大時間 (ms)，堵轉偵測之外的第二層保護（實測全程約 3 秒）
+move_timeout_ms: 5000
+
+# 時間差堵轉偵測（目標是全緊或全鬆時用，搭配動態歸零）：
+# 距上一個脈衝的時間超過「正常間隔基準值」的 stall_ratio_num/stall_ratio_den 倍，且至少經過
+# min_stall_floor_us，才判定堵轉。兩端都是確認過的機構死點，偵測到堵轉就把位置強制校正回 pos_tight / pos_loose。
+# 實測脈衝間隔是兩群（同一格的兩個邊緣約 0.4 ms、格與格之間約 30 ms），比例那項作用不大，實際由 floor 決定；
+# 轉動中最長間隔實測 57 ms，floor 100 ms 約 2 倍餘裕。
+stall_ratio_num: 17
+stall_ratio_den: 10
+min_stall_floor_us: 100000   # 100ms
+
+# 剛啟動、還沒有基準間隔可比較時的保護時間 (ms)（實測通電到第一個脈衝 1～61 ms）
+start_timeout_ms: 500
+
+# 簡單版堵轉偵測（目標是中間時用）：連續這麼久完全沒有新脈衝，才判定堵轉。
+# 中間沒有死點，不套用動態歸零，只當作安全網。
+stall_timeout_ms: 400
+
+# 坑洞代理門檻：畫面 3x5 網格裡 severe 格數達到這個數字，就視為偵測到坑洞 → 全鬆
+# （這個系統目前沒有真正的坑洞偵測，見 README「需要你確認的假設」）
+pothole_severe_cell_threshold: 2
+
+# 位置持久化：每次移動完成後把目前 pulse 位置存這裡，開機時讀回來，不用像 Arduino 版一樣
+# 每次開機都假設在全緊。讀不到/壞掉時退回 pos_tight。
+position_store: presets/motor_position.json
+
+# 防抖動：辨識結果在臨界點附近會抖動（路面標籤、坑洞格數、人員偵測都可能一幀一幀跳），
+# 沒有防護的話馬達會被要求頻繁來回切換，磨損齒輪。兩層保護：
+#   confirm_count            新的目標要連續這麼多次決策都一樣才算數（仿 road_type.yaml 的 confirm_count）
+#   min_switch_interval_sec  就算目標確認變了，離上次真的送出切換命令沒過這麼久也先不送
+#                            （仿 detect.yaml 的 alert_cooldown_sec），這是切換頻率的硬上限
+confirm_count: 5
+min_switch_interval_sec: 3.0

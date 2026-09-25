@@ -18,3 +18,6 @@ outputs/
 # 現場框選的結果（每台車/每次安裝不同）
 presets/roi.json
 presets/warning_zone.json
+
+# 避震器馬達目前位置（每次移動完成都會改寫）
+presets/motor_position.json

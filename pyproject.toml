@@ -12,6 +12,9 @@ dependencies = [
 ]
 # hailo_platform 與 picamera2 不在 PyPI 上，走系統套件（venv 需 --system-site-packages）。
 # 只跑 Hailo，不裝 torch / ultralytics（原專案的 .pt CPU 備援不納入）。
+# lgpio（驅動避震器馬達 M+/M-、讀編碼器脈衝）也走系統套件 python3-lgpio：Pi 5 是 RP1 晶片，
+# RPi.GPIO 原生不支援，lgpio 是官方建議的做法。PyPI 上的 lgpio 只有原始碼、要 swig 才編得起來，
+# 所以不列進 dependencies。
 
 [tool.uv]
 # 一定要用系統的 /usr/bin/python3.13，不能讓 uv 自己下載一份：

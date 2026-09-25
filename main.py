@@ -8,6 +8,8 @@
     OverlayView          人車偵測 + Kalman 追蹤 + 警戒區警報
     car_door             車門開啟 / 關閉偵測
 
+另外依上述辨識結果自動控制避震器鎖緊/放鬆（沒有實體按鈕，見 src/motor.py、src/motor_policy.py）。
+
 執行：
     uv run main.py                 沿用上次框的路面 ROI 與警戒區，開視窗、錄影
     uv run main.py --ui            重新框選路面 ROI 與警戒區（鏡頭位置動過時）
@@ -25,6 +27,7 @@
     路面分析緒  ResNet → asphalt 或 cement 分級（見 src/analyzer.py）
     偵測緒      YOLO → 追蹤 → 警戒判斷（見 src/detect.py）
     車門緒      YOLOv11m 車門開 / 關（見 src/door.py）
+    馬達緒      依主緒算出的目標位置驅動避震器馬達、讀編碼器脈衝（見 src/motor.py）
 """
 
 import argparse
@@ -40,17 +43,20 @@ from src.draw import put_text_outlined
 from src.settings import SettingsError, load_settings
 
 
-def _draw_status(frame, fps_shown, road, det, door, rr, dr) -> None:
-    """左上角疊一行狀態：實際幀率、路面種類與分級模式、車門狀態、三條分析緒的次數與耗時。"""
+def _draw_status(frame, fps_shown, road, det, door, rr, dr, ms) -> None:
+    """左上角疊一行狀態：實際幀率、路面種類與分級模式、車門狀態、三條分析緒的次數與耗時、馬達狀態。"""
     if rr is None:
         road_txt = "road: ..."
     else:
         mode = {"asphalt": "asphalt grid", "cement": "cement grid+crack", "none": "no grading"}[rr.mode]
         road_txt = f"{rr.label} {rr.confidence:.2f} -> {mode}"
     door_txt = "door: ..." if dr is None else f"door: {dr.state.upper()}"
+    motor_txt = "motor: ..." if ms is None else (
+        f"motor: {'MOVING' if ms.busy else (ms.target or '?').upper()} pulse={ms.position_pulses}")
     text = (f"{fps_shown:4.1f} fps | {road_txt} #{road.update_count} ({road.last_ms:.0f} ms)"
             f" | det #{det.update_count} ({det.last_ms:.0f} ms)"
-            f" | {door_txt} #{door.update_count} ({door.last_ms:.0f} ms)")
+            f" | {door_txt} #{door.update_count} ({door.last_ms:.0f} ms)"
+            f" | {motor_txt}")
     put_text_outlined(frame, text, (10, 24), 0.6)
 
 
@@ -91,6 +97,8 @@ def main() -> None:
     from src.grading.graders import AsphaltGrader, CementGrader
     from src.hailo import HailoDevice
     from src.metrics import MetricsRecorder
+    from src.motor import MotorController
+    from src.motor_policy import TargetDebouncer, decide_target
     from src.recorder import SegmentRecorder
     from src.road_type import RoadTypeClassifier
     from src.roi import camera_key, resolve_roi
@@ -102,7 +110,7 @@ def main() -> None:
 
     dev = HailoDevice()
     cam = None
-    road = det = door = None
+    road = det = door = motor = None
     recorder = None
     logger = None
     metrics = None
@@ -165,9 +173,15 @@ def main() -> None:
         road = RoadAnalyzer(road_type, asphalt, cement)
         det = DetectorThread(detector, zone, cfg.detect, W, H)
         door = DoorThread(door_detector, W, H)
+        motor = MotorController(cfg.motor)
         road.start()
         det.start()
         door.start()
+        motor.start()
+        motor_debouncer = TargetDebouncer(cfg.motor.confirm_count)
+        last_motor_target = None      # 上次成功送出的目標，只在確認變了才下命令
+        last_motor_switch_time = 0.0  # 上次成功送出切換命令的時間，搭配 min_switch_interval_sec 限頻
+        motor_busy_warned = None      # 已經印過「忙碌中被略過」的目標
 
         if not args.no_save:
             recorder = SegmentRecorder(cfg.output)
@@ -245,17 +259,35 @@ def main() -> None:
             dr = door.latest()
             draw_doors(frame, dr)
 
+            # 馬達：依路面/坑洞/人員/車門決定目標位置。兩層防抖動避免頻繁切換磨損齒輪：
+            # TargetDebouncer 過濾掉辨識結果本身的抖動（見 src/motor_policy.py），
+            # min_switch_interval_sec 是切換頻率的硬上限，就算目標真的確認變了也要間隔夠久才送
+            raw_target = decide_target(rr, det_res, dr, cfg.motor)
+            motor_target = motor_debouncer.update(raw_target)
+            if motor_target is not None and motor_target != last_motor_target:
+                now_t = time.monotonic()
+                if now_t - last_motor_switch_time < cfg.motor.min_switch_interval_sec:
+                    pass   # 還在最短切換間隔內，先不送，下一幀再檢查
+                elif motor.move_to(motor_target):
+                    last_motor_target = motor_target
+                    last_motor_switch_time = now_t
+                elif motor_busy_warned != motor_target:
+                    # 忙碌時每幀都會重試，同一個目標只印一次，避免 20 fps 洗版
+                    print(f"[馬達] 目標改為 {motor_target}，但馬達忙碌中，命令被略過（完成後重試）", flush=True)
+                    motor_busy_warned = motor_target
+            ms = motor.latest()
+
             now = time.perf_counter()
             if now - last_t >= 1.0:
                 fps_shown = (frame_idx - last_n) / (now - last_t)
                 last_t, last_n = now, frame_idx
-            _draw_status(frame, fps_shown, road, det, door, rr, dr)
+            _draw_status(frame, fps_shown, road, det, door, rr, dr, ms)
             t_write = time.perf_counter()
 
             if recorder:
                 recorder.write(frame)
             # 放在 recorder.write 之後：錄影剛切新檔時，log 用的是新檔名
-            logger.update(snapshot(rr, det_res, dr, det_classes), time.time(),
+            logger.update(snapshot(rr, det_res, dr, det_classes, ms), time.time(),
                           (recorder.path.stem, recorder.seg_start) if recorder else None)
             t_show = time.perf_counter()
             key = -1
@@ -280,12 +312,14 @@ def main() -> None:
     finally:
         # 順序很重要：先停取樣緒（它會讀 Hailo 溫度）與三條分析緒（它們還在用 Hailo），
         # 再收 writer（moov 在 release 時才寫），關相機，最後才釋放 Hailo
-        for t in (metrics, road, det, door):
+        for t in (metrics, road, det, door, motor):
             if t:
                 t.stop()
-        for t in (metrics, road, det, door):
+        for t in (metrics, road, det, door, motor):
             if t:
                 t.join(timeout=5)
+        if motor:
+            motor.close()
         if recorder:
             recorder.close()
         if logger:
@@ -301,7 +335,8 @@ def main() -> None:
     print(f"{'已中斷。' if interrupted else ''}共 {frame_idx} 幀 / {elapsed:.0f} 秒（平均 {avg:.1f} fps）"
           + (f"，路面分析 {road.update_count} 次、切換 {road.switches} 次" if road else "")
           + (f"，偵測 {det.update_count} 次" if det else "")
-          + (f"，車門偵測 {door.update_count} 次" if door else ""))
+          + (f"，車門偵測 {door.update_count} 次" if door else "")
+          + (f"，馬達最終 pulse = {ms.position_pulses}" if motor and (ms := motor.latest()) else ""))
     if recorder:
         print(f"錄影輸出到: {cfg.output.dir}")
     if logger:

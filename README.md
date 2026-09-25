@@ -14,7 +14,11 @@
 Belgian Block / Forest Road 本來就不平整 → 只顯示種類、不畫網格。
 人車偵測與警戒區、車門偵測同時跑在整張畫面上（車門開啟紅框、關閉綠框，狀態顯示在左上角狀態列，不發警報）。全部疊在一個 1280×960 畫面（相機以原生 3280×2464 全幅擷取，最高約 21 fps；路面 ROI 從原圖裁切分析，顯示與錄影再縮小），即時顯示並每分鐘存一段。
 
-硬體：Raspberry Pi 5 + Hailo-8 AI HAT + IMX219 Stereo Camera（兩顆朝同一方向、倒裝；目前只用 cam0）。
+另外依上述辨識結果自動控制避震器鎖緊/放鬆（沒有實體按鈕，`src/motor.py` + `src/motor_policy.py`，
+邏輯移植自 Arduino `0709_3btn_edge.ino`，細節見「避震器馬達控制」一節）。
+
+硬體：Raspberry Pi 5 + Hailo-8 AI HAT + IMX219 Stereo Camera（兩顆朝同一方向、倒裝；目前只用 cam0）
++ 避震器調整馬達（M+/M- 兩條控制線、1 條編碼器脈衝回饋，接 Pi 5 的 GPIO）。
 
 ---
 
@@ -56,6 +60,7 @@ uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階�
 | [`cement.yaml`](configs/cement.yaml) | cement | 模型、類別名、網格、裂縫參數檔、融合權重、PID / EMA 平滑 |
 | [`detect.yaml`](configs/detect.yaml) | OverlayView | YOLO 模型、信心門檻、保留類別、追蹤器、警戒區檔與預設 |
 | [`door.yaml`](configs/door.yaml) | car_door | 車門模型、分數門檻、類別名稱順序、哪些類別算開啟 |
+| [`motor.yaml`](configs/motor.yaml) | — | 避震器馬達：GPIO 腳位、三個目標位置、堵轉偵測門檻、坑洞代理門檻、防抖動（confirm_count / 最短切換間隔） |
 | [`output.yaml`](configs/output.yaml) | — | 顯示與錄影畫面尺寸、輸出資料夾、分段秒數、錄影 fps、視窗標題、偵測結果 log 資料夾與防閃動秒數 |
 | [`metrics.yaml`](configs/metrics.yaml) | — | 指標取樣開關、間隔、輸出資料夾、Hailo / 相機 / 風扇的估算參數與 DC-DC 效率 |
 
@@ -64,6 +69,51 @@ uv run main.py --metrics       # 同時取樣功耗 / 頻率 / 降頻 / 各階�
 `road_type.yaml` 的 `confirm_count`（預設 3）：新的路面種類要連續 N 次分析都勝出才切換分級模型。
 沒有它，在瀝青/水泥邊界或 ResNet 機率接近時會每輪來回切換，網格顏色閃爍、
 兩個分級器的時序平滑一直被重置。代價是真正換路面時晚 N 次分析（約 0.1～0.5 秒）才反應。設 1 = 不遲滯。
+
+---
+
+## 避震器馬達控制
+
+沒有實體按鈕，`main.py` 主迴圈每幀依當下的路面/坑洞/人員/車門辨識結果算出目標位置（`src/motor_policy.py`
+的 `decide_target()`），目標改變時才呼叫 `MotorController.move_to()`（`src/motor.py`）。
+沒有加權優先序，依序覆蓋、最後一條規則贏：
+
+1. **路面種類定基準**：`Asphalt Road` / `Concrete road` → 鎖緊（`tight`）；`Forest Road` → 全鬆（`loose`）；
+   `Belgian Block` → 中間（`mid`）
+2. **坑洞覆蓋** → 全鬆：目前畫面 3×5 網格 `severe` 格數達 `motor.yaml` 的 `pothole_severe_cell_threshold`
+3. **安全覆蓋（永遠贏）** → 鎖緊：畫面裡偵測到 `person`，或車門狀態為 `open`
+
+馬達控制邏輯（雙模式堵轉偵測 + 動態歸零）移植自 Arduino `0709_3btn_edge.ino`，用 `lgpio`
+驅動（Pi 5 的 RP1 晶片，`RPi.GPIO` 不支援）。跟 Arduino 版不同：全緊、全鬆兩端都是實測確認的機構死點，
+目標是兩端時不看計數、一律轉到堵轉才停並把位置校正回該端（計數有約 10% 漂移，靠計數停會鎖不緊）；
+中間位置照計數停。行程實測約 197 個脈衝、3 秒；校正時 log 會印出這一趟的計數漂移
+（例如 `位置自動校正：-8 → 0（漂移 -8）`），細節見 `MOTOR_INTEGRATION.md`。
+
+**位置持久化**：每次移動完成後把目前 pulse 位置存進 `motor.yaml` 的 `position_store`
+（預設 `presets/motor_position.json`，atomic write），開機時讀回來，不像 Arduino 版每次開機都假設全緊
+——樹莓派有真正的檔案系統，不需要 ESP32 那種 NVS。讀不到/壞掉/超出範圍時才退回 `pos_tight`。
+
+**防抖動（避免頻繁切換磨損齒輪）**：`decide_target()` 是每幀重算的瞬時決策，路面標籤、坑洞格數、
+人員偵測在臨界點附近都可能一幀一幀跳。兩層保護（都在 `motor.yaml`）：
+
+- `confirm_count`（預設 5）：同一個目標要連續這麼多次決策都一樣才算確認（`src/motor_policy.py` 的
+  `TargetDebouncer`，仿 `road_type.yaml` 的 `confirm_count`，同一手法防同一類問題）
+- `min_switch_interval_sec`（預設 3 秒）：就算目標確認變了，離上次真的送出切換命令沒過這麼久也先不送
+  （`main.py` 主迴圈裡實作，仿 `detect.yaml` 的 `alert_cooldown_sec`），這是切換頻率的硬上限
+
+**已知的訊號落差**（跟原本 Arduino 版按鈕觸發不同，這裡是自動決策，兩個規則用的是代理訊號，不是真正對應的偵測）：
+
+- **坑洞**：這個系統沒有接真正的坑洞偵測（`src/grading/pothole/detector.py` 的 `PotholeDetector`
+  是死程式碼，沒被接進 `CementGrader`/`AsphaltGrader` 的流程），目前用「severe 格數」代理，門檻在
+  `motor.yaml` 調整
+- **人員移動**：`TrackView`（`src/detect.py`）沒有速度欄位，只有座標歷史，目前簡化成「畫面裡有 person
+  類別就觸發」，不判斷是否真的在動
+
+**時間精度**：ESP32 是專用微控制器，中斷延遲微秒等級且穩定；這裡跑 Linux + Python，`lgpio` 的回呼
+是一批一批送進來的，所以脈衝間隔（濾波、堵轉基準）一律用回呼帶的核心時間戳記 tick，不用回呼被呼叫的時間
+（後者實測會把約三分之一的真脈衝當雜訊丟掉）。堵轉判斷的「多久沒脈衝」仍受系統排程與 Hailo 負載影響，抖動比
+ESP32 大很多。`motor.yaml` 裡跟 ESP32 版本抄過來的堵轉偵測門檻（`stall_ratio_*`、
+`min_stall_floor_us`、`start_timeout_ms`、`stall_timeout_ms`）幾乎確定需要在 Pi 上重新實測調整。
 
 ---
 
@@ -87,6 +137,7 @@ JSON Lines，每行一筆，**只在狀態改變時記**：
 | `grid` | 網格各等級格數 `{"severe", "slight", "smooth"}`；不分級的路面為 `{}` |
 | `objects` | 各類人車數量（`detect.yaml` 的 classes） |
 | `door` | 車門 `open` / `closed` / `none` |
+| `motor` | 避震器目標位置 `tight` / `mid` / `loose`（記目標名稱，不是忙碌狀態，見「避震器馬達控制」） |
 
 防閃動：新值要穩定維持 `output.yaml` 的 `log_stable_sec`（預設 0.5 秒）才算改變，
 偵測漏抓一兩幀不會被記；`time` 記的是新值開始出現的時間。
@@ -129,7 +180,15 @@ main.py                 進入點：讀設定、載模型、開鏡頭、主迴�
 configs/                各專案的設定檔
 models/                 五個 .hef；resnet/ 另含 config.json、classes.txt
 presets/                rough.json / smooth.json / pid.json（複製自 cement）
-                        roi.json / warning_zone.json（程式自動產生）
+                        roi.json / warning_zone.json / motor_position.json（程式自動產生）
+tests/
+  simulate_motor.py         不需要真實硬體的馬達模擬測試（假 lgpio + 背景執行緒模擬轉動），
+                            改動 src/motor.py 或 src/motor_policy.py 後先跑這個當回歸測試
+  manual_jog.py             寸動工具：一次轉一小段，把避震器轉回全緊、重設位置存檔、實測 pos_loose
+  manual_gpio_test.py       階段1：空轉測試，鍵盤手動控制正反轉 + 看脈衝數，不掛避震器
+  manual_motor_control.py   階段2：裝上避震器後，鍵盤手動觸發 move_to()，測真正的堵轉偵測/
+                            動態歸零/位置持久化，還不接 CV 自動決策
+                            （階段3就是直接 uv run main.py，接上自動辨識，不用另外寫腳本）
 src/
   settings.py           讀 configs/*.yaml 並驗證
   hailo.py              共用 VDevice（scheduler）+ HailoModel 包裝（run_async 多張並排）
@@ -139,6 +198,8 @@ src/
   analyzer.py           路面分析緒：ResNet → asphalt / cement 分級
   detect.py             YOLO NMS 解析、Kalman、追蹤、警戒區（可存檔）、警報、偵測緒、繪製（自 OverlayView）
   door.py               車門 YOLOv11m NMS 解析、車門緒、繪製（自 car_door）
+  motor.py              避震器馬達控制：lgpio 驅動 + 堵轉偵測 + 動態歸零（改寫自 Arduino 0709_3btn_edge.ino）
+  motor_policy.py        依路面/坑洞/人員/車門結果決定馬達目標位置（decide_target()）
   recorder.py           分段錄影（自 OverlayView，時間戳命名）
   event_log.py          偵測結果 log（狀態改變才記、防閃動、跟錄影同名切檔）
   draw.py               OpenCV 5 相容的描邊文字
@@ -194,6 +255,13 @@ uv sync
 之後若刪掉 `.venv` 重建，記得先 `uv venv --system-site-packages` 再 `uv sync`。
 
 只跑 Hailo，不裝 torch / ultralytics（原專案的 `.pt` CPU 備援不納入）。
+
+**馬達控制需要 `lgpio`**，走 apt 的系統套件 `python3-lgpio`（Raspberry Pi OS 預設已裝；沒有的話
+`sudo apt install python3-lgpio`），跟 `hailo_platform`/`picamera2` 一樣靠 `--system-site-packages` 讀到。
+不列進 `pyproject.toml`：PyPI 上的 lgpio 只有原始碼，沒有 swig 會編譯失敗，連帶 `uv run` 同步也會失敗。
+
+第一次接上馬達前，建議先跑 `uv run tests/simulate_motor.py`（不需要真實硬體）確認邏輯本身沒問題，
+再上機測 `lgpio` 的實際腳位/中斷是否正常——這部分模擬測試沒辦法取代，細節見 `MOTOR_INTEGRATION.md`。
 
 ---
 

@@ -26,11 +26,11 @@ from pathlib import Path
 
 from .settings import OutputSettings
 
-FIELDS = ("road", "grading", "grid", "objects", "door")
+FIELDS = ("road", "grading", "grid", "objects", "door", "motor")
 
 
-def snapshot(rr, det_result, door_result, classes: list[str]) -> dict:
-    """把三條分析緒的最新結果整理成摘要；還沒有結果的欄位是 None（不會觸發紀錄）。"""
+def snapshot(rr, det_result, door_result, classes: list[str], motor_status=None) -> dict:
+    """把三條分析緒＋馬達的最新結果整理成摘要；還沒有結果的欄位是 None（不會觸發紀錄）。"""
     state = dict.fromkeys(FIELDS)
     state["road_conf"] = None
     if rr is not None:
@@ -44,6 +44,9 @@ def snapshot(rr, det_result, door_result, classes: list[str]) -> dict:
         state["objects"] = {c: seen.get(c, 0) for c in classes}
     if door_result is not None:
         state["door"] = door_result.state
+    if motor_status is not None:
+        # 記目標位置名稱（tight/mid/loose），不是忙碌狀態，避免每次移動的短暫 busy 都觸發紀錄
+        state["motor"] = motor_status.target
     return state
 
 
