@@ -21,7 +21,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from .draw import STATUS_TOP_RESERVED
+from .draw import (STATUS_TOP_RESERVED, TOP_RIGHT_RESERVED, UI_FONT_SCALE, UI_THICKNESS, fit_text_x,
+                   put_text_panel)
 from .hailo import HailoModel
 from .roi import select_rect
 from .settings import DetectSettings
@@ -398,7 +399,6 @@ class DetectorThread(threading.Thread):
 # ── 7. 覆蓋層繪製 ───────────────────────────────────────────
 class OverlayRenderer:
     def draw(self, frame: np.ndarray, result: DetectResult | None, zone: Zone) -> None:
-        h, w = frame.shape[:2]
         alert = bool(result and result.alert)
 
         # 警戒範圍：正常為黃色，觸發警報後為紅色
@@ -408,18 +408,24 @@ class OverlayRenderer:
         cv2.rectangle(overlay, (rx1, ry1), (rx2, ry2), zone_color, -1)
         cv2.addWeighted(overlay, 0.12, frame, 0.88, 0, frame)
         cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), zone_color, 3)
-        # 標籤畫在警戒區上方；上方空間不夠時（會壓到左上角的狀態區，
-        # 見 src/draw.py 的 STATUS_TOP_RESERVED）改畫在警戒區內側左下角
-        label_y = ry1 - 10 if ry1 - 10 >= STATUS_TOP_RESERVED else ry2 - 12
-        cv2.putText(frame, "WARNING ZONE", (rx1 + 8, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, zone_color, 2)
+        # 標籤（黑底，黃字在白背景上才看得到）畫在警戒區左上方；上方空間不夠時（會壓到左上角的狀態區，
+        # 見 src/draw.py 的 STATUS_TOP_RESERVED）改畫在警戒區內側右上角、FPS 面板下方（左下角會壓到路面 ROI 格網）
+        label = "WARNING ZONE"
+        (lw, lh), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, UI_FONT_SCALE, UI_THICKNESS)
+        panel_w, panel_h = lw + 20, lh + base + 20          # put_text_panel 的 pad=10
+        if ry1 - panel_h - 4 >= STATUS_TOP_RESERVED:
+            panel_xy = (rx1 + 4, ry1 - panel_h - 4)
+        else:
+            panel_xy = (max(0, rx2 - panel_w - 4), max(ry1, TOP_RIGHT_RESERVED) + 4)
+        put_text_panel(frame, [(label, zone_color)], *panel_xy, UI_FONT_SCALE, UI_THICKNESS)
         if result is None:
             return
 
         for (cx, cy, label, score, x1, y1, x2, y2) in result.detections:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, f"{label} {score:.2f}", (x1, y1 - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 1)
+            text = f"{label} {score:.2f}"
+            cv2.putText(frame, text, (fit_text_x(frame, text, x1, UI_FONT_SCALE, UI_THICKNESS), y1 - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, UI_FONT_SCALE, (0, 255, 0), UI_THICKNESS)
 
         for t in result.tracks:
             color = self._track_color(t.id)
@@ -429,23 +435,11 @@ class OverlayRenderer:
                     cv2.line(frame, tuple(pts[i - 1]), tuple(pts[i]), color, 2)
             cv2.circle(frame, (t.x, t.y), 8, color, -1)
             cv2.putText(frame, f"ID{t.id}", (t.x + 10, t.y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, UI_FONT_SCALE, color, UI_THICKNESS)
             cv2.circle(frame, (t.px, t.py), 14, (255, 0, 255), 2)
             cv2.putText(frame, "pred", (t.px + 8, t.py + 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
-
-        if alert:
-            self._draw_alert(frame, w)
-
-    def _draw_alert(self, frame, w):
-        msg = "ALERT: OBJECT IN WARNING ZONE"      # OpenCV 內建字型不支援中文
-        font, font_scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2
-        (tw, th), _ = cv2.getTextSize(msg, font, font_scale, thickness)
-        x, pad = w // 2 - tw // 2, 12
-        y = STATUS_TOP_RESERVED + th + pad + 20      # 橫幅放在左上角狀態區下方，不重疊
-        cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + pad), (255, 255, 255), -1)
-        cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + pad), (0, 0, 255), 2)
-        cv2.putText(frame, msg, (x, y), font, font_scale, (0, 0, 200), thickness)
+                        cv2.FONT_HERSHEY_SIMPLEX, UI_FONT_SCALE, (255, 0, 255), UI_THICKNESS)
+        # 警報時不另外畫橫幅（2026-09-26 使用者要求拿掉），只靠警戒區框與 WARNING ZONE 標籤變紅；警報聲照舊（AlertController）
 
     @staticmethod
     def _track_color(track_id: int) -> tuple:

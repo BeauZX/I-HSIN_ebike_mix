@@ -35,8 +35,8 @@
 |---|---|
 | `src/settings.py` | 加 `MotorSettings` dataclass（21 個欄位）、加進 `Settings`、`load_settings()` 讀 `motor.yaml` 並驗證（腳位不重複、位置範圍、比例值 > 0 等） |
 | `pyproject.toml` | 註解說明 `lgpio` 走系統套件 `python3-lgpio`（PyPI 版只有原始碼、缺 swig 編不起來，不列進 `dependencies`） |
-| `main.py` | import 馬達相關模組；建立並啟動 `motor` 執行緒；主迴圈每幀呼叫 `decide_target()` → `TargetDebouncer` → 冷卻時間檢查 → `move_to()`；左上角狀態區改成給報告投影用：一項一行 `ROAD: Concrete road (98%)` / `GRADING: cement grid+crack` / `DOOR: CLOSED`（沒偵測到車門顯示 `NOT DETECTED`）/ `SUSPENSION: Half-Lock`（字級 1.0、粗細 2；檔位顯示名稱 tight / mid / loose = `Lock` / `Half-Lock` / `Unlock`，log 與設定檔仍用英文代號），FPS 小字放右上角；分析緒次數與耗時這些除錯數字不上畫面，改看 metrics / log。避震器切換中黃字 `SUSPENSION: Half-Lock -> Unlock  (-143)`（即時 pulse，跟 log 對得上；沒到位時標出停止原因）；收尾流程加 `motor.stop()`/`join()`/`close()`；確認的新目標遇到馬達忙碌時，「命令被略過」同一個目標只印一次（USB 版每幀都印，20 fps 下每秒 20 行） |
-| `src/detect.py` | `WARNING ZONE` 標籤在警戒區上方空間不夠時（會壓到左上角狀態區）改畫在警戒區內側左下角；ALERT 橫幅移到狀態區下方（留白高度統一定義在 `src/draw.py` 的 `STATUS_TOP_RESERVED`） |
+| `main.py` | import 馬達相關模組；建立並啟動 `motor` 執行緒；主迴圈每幀呼叫 `decide_target()` → `TargetDebouncer` → 冷卻時間檢查 → `move_to()`；左上角狀態區改成給報告投影用：一項一行 `ROAD: Concrete road (98%)` / `GRADING: cement grid+crack` / `DOOR: CLOSED`（沒偵測到車門顯示 `NOT DETECTED`）/ `SUSPENSION: Half-Lock`（字級 1.3、粗細 2，半透明黑底面板，亮背景也看得清楚；檔位顯示名稱 tight / mid / loose = `Lock` / `Half-Lock` / `Unlock`，log 與設定檔仍用英文代號），FPS 小字黑底放右上角；分析緒次數與耗時這些除錯數字不上畫面，改看 metrics / log。避震器切換中黃字 `SUSPENSION: Half-Lock -> Unlock  (-143)`（即時 pulse，跟 log 對得上；沒到位時標出停止原因）；收尾流程加 `motor.stop()`/`join()`/`close()`；確認的新目標遇到馬達忙碌時，「命令被略過」同一個目標只印一次（USB 版每幀都印，20 fps 下每秒 20 行） |
+| `src/detect.py`、`src/door.py`、`src/grading/grid.py`、`src/grading/graders.py` | 報告用版面：所有文字統一 `UI_FONT_SCALE`（1.3，`src/draw.py`）；`WARNING ZONE` 改黑底，警戒區上方空間不夠時放警戒區內側右上角（FPS 下方）；人車 / 車門標籤靠右時往左推；拿掉中間的 ALERT 警告橫幅（警戒區框與標籤變紅，警報聲照舊）；路面格網只用顏色、格子裡不寫字 |
 | `src/event_log.py` | `FIELDS` 加 `"motor"`，`snapshot()` 多吃一個 `motor_status` 參數，記錄目標位置名稱（tight/mid/loose） |
 | `README.md` | 加「避震器馬達控制」章節（決策規則、防抖動、位置持久化、時間精度提醒、已知訊號落差）；模組表、config 表、log 欄位表、`presets/` 說明都補上馬達相關項目 |
 

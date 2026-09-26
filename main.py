@@ -39,14 +39,12 @@ import time
 import src  # noqa: F401  先 import：它會設 QT_QPA_PLATFORM，必須早於 cv2
 import cv2
 
-from src.draw import put_text_outlined
+from src.draw import UI_FONT_SCALE, UI_THICKNESS, put_text_panel
 from src.settings import SettingsError, load_settings
 
 
 # 左上角狀態區：一項一行（報告投影用，比其他標籤大；分析緒的次數與耗時不上畫面，看 metrics / log）
-_HUD_SCALE, _HUD_THICKNESS = 1.0, 2
-_HUD_X, _HUD_Y0, _HUD_LINE_H = 10, 36, 42   # 最後一行的底要在 src/draw.py 的 STATUS_TOP_RESERVED 之內
-_FPS_SCALE = 0.7                            # FPS 是系統資訊，小字放右上角
+_HUD_X, _HUD_Y = 4, 4          # 黑底面板左上角；面板的底要在 src/draw.py 的 STATUS_TOP_RESERVED 之內
 _WHITE, _YELLOW = (255, 255, 255), (0, 215, 255)
 _GRADING_TEXT = {"asphalt": "asphalt grid", "cement": "cement grid+crack", "none": "none"}
 # 畫面上的顯示名稱（程式內部、log、設定檔仍用原本的代號）
@@ -73,19 +71,18 @@ def _suspension_line(ms) -> tuple[str, tuple]:
 
 
 def _draw_status(frame, fps_shown, rr, dr, ms) -> None:
-    """左上角一項一行：路面種類與信心、分級模式、車門、避震器；FPS 小字放右上角。"""
+    """左上角黑底面板一項一行：路面種類與信心、分級模式、車門、避震器；FPS 黑底放右上角。"""
     lines = [
         ("ROAD: ..." if rr is None else f"ROAD: {rr.label} ({rr.confidence:.0%})", _WHITE),
         ("GRADING: ..." if rr is None else f"GRADING: {_GRADING_TEXT[rr.mode]}", _WHITE),
         ("DOOR: ..." if dr is None else f"DOOR: {_DOOR_TEXT[dr.state]}", _WHITE),
         _suspension_line(ms),
     ]
-    for i, (text, color) in enumerate(lines):
-        put_text_outlined(frame, text, (_HUD_X, _HUD_Y0 + i * _HUD_LINE_H), _HUD_SCALE, color, _HUD_THICKNESS)
+    put_text_panel(frame, lines, _HUD_X, _HUD_Y, UI_FONT_SCALE, UI_THICKNESS)
 
     fps_text = f"{fps_shown:.1f} FPS"
-    (tw, _), _ = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, _FPS_SCALE, _HUD_THICKNESS)
-    put_text_outlined(frame, fps_text, (frame.shape[1] - tw - 10, 30), _FPS_SCALE, _WHITE, _HUD_THICKNESS)
+    (tw, _), _ = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, UI_FONT_SCALE, UI_THICKNESS)
+    put_text_panel(frame, [(fps_text, _WHITE)], frame.shape[1] - tw - 24, _HUD_Y, UI_FONT_SCALE, UI_THICKNESS)
 
 
 def main() -> None:
@@ -277,7 +274,7 @@ def main() -> None:
                 cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (255, 255, 255), 1)
             if rr is not None:
                 cv2.putText(frame, rr.label, (rx1 + 6, max(ry1 - 8, 50)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                            cv2.FONT_HERSHEY_SIMPLEX, UI_FONT_SCALE, (255, 255, 255), UI_THICKNESS, cv2.LINE_AA)
 
             # 人車：偵測框、軌跡、預測點、警戒區、警報
             det_res = det.latest()

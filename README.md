@@ -12,7 +12,7 @@
 
 流程：ResNet 判成 **Asphalt Road** → 跑 asphalt 分級；**Concrete road** → 跑 cement 分級；
 Belgian Block / Forest Road 本來就不平整 → 只顯示種類、不畫網格。
-人車偵測與警戒區、車門偵測同時跑在整張畫面上（車門開啟紅框、關閉綠框，狀態顯示在左上角，不發警報）。左上角一項一行：`ROAD`（路面種類與信心）、`GRADING`（分級模式）、`DOOR`（`OPEN` / `CLOSED` / `NOT DETECTED`）、`SUSPENSION`（避震器：停著顯示目前檔位 `Lock` / `Half-Lock` / `Unlock`，對應 tight / mid / loose；切換中黃字顯示 `Half-Lock -> Unlock  (-143)`，括號是即時 pulse）；FPS 小字在右上角。全部疊在一個 1280×960 畫面（相機以原生 3280×2464 全幅擷取，最高約 21 fps；路面 ROI 從原圖裁切分析，顯示與錄影再縮小），即時顯示並每分鐘存一段。
+人車偵測與警戒區、車門偵測同時跑在整張畫面上（車門開啟紅框、關閉綠框，狀態顯示在左上角，不發警報）。畫面上所有文字統一字級 1.3（`src/draw.py` 的 `UI_FONT_SCALE`，給報告投影用）。路面格網只用顏色表示等級、格子裡不寫字；人進入警戒區時不畫警告橫幅，警戒區框與 `WARNING ZONE` 標籤變紅（警報聲照舊）。左上角一項一行：`ROAD`（路面種類與信心）、`GRADING`（分級模式）、`DOOR`（`OPEN` / `CLOSED` / `NOT DETECTED`）、`SUSPENSION`（避震器：停著顯示目前檔位 `Lock` / `Half-Lock` / `Unlock`，對應 tight / mid / loose；切換中黃字顯示 `Half-Lock -> Unlock  (-143)`，括號是即時 pulse）；左上角、右上角 FPS、`WARNING ZONE`（在警戒區內側右上角）都有半透明黑底，背景再亮也看得清楚；標籤碰到畫面右邊會往左推。全部疊在一個 1280×960 畫面（相機以原生 3280×2464 全幅擷取，最高約 21 fps；路面 ROI 從原圖裁切分析，顯示與錄影再縮小），即時顯示並每分鐘存一段。
 
 另外依上述辨識結果自動控制避震器鎖緊/放鬆（沒有實體按鈕，`src/motor.py` + `src/motor_policy.py`，
 邏輯移植自 Arduino `0709_3btn_edge.ino`，細節見「避震器馬達控制」一節）。

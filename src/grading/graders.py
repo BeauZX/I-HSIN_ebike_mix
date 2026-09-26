@@ -148,7 +148,8 @@ class CementGrader:
 
     def draw(self, roi_bgr: np.ndarray, result) -> np.ndarray:
         frame_result, level = result
-        return draw_overlay(roi_bgr, frame_result, level=level)
+        # 格子裡不寫字（2026-09-26 使用者要求拿掉），顏色本身就代表等級
+        return draw_overlay(roi_bgr, frame_result, level=level, show_text=False)
 
     def grade_counts(self, result) -> dict[str, int]:
         _, level = result       # 0 / 1 / 2 = smooth / slight / severe（yolo_grid.SEVERITY_NAMES）

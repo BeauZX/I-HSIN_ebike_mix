@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from .draw import put_text_outlined
+from .draw import UI_FONT_SCALE, UI_THICKNESS, fit_text_x, put_text_outlined
 from .hailo import HailoModel
 from .settings import DoorSettings
 
@@ -145,6 +145,8 @@ def draw_doors(frame: np.ndarray, result: DoorResult | None) -> None:
     for b in result.boxes:
         color = OPEN_COLOR if b.is_open else CLOSED_COLOR
         cv2.rectangle(frame, (b.x1, b.y1), (b.x2, b.y2), color, 2)
-        # 框太靠上時標籤改畫在框內，免得壓到左上角的狀態列（y≈24）
-        ty = b.y1 - 8 if b.y1 >= 50 else max(b.y1, 32) + 20
-        put_text_outlined(frame, f"door {b.label} {b.score:.2f}", (b.x1 + 3, ty), 0.55, color, 1)
+        # 框太靠上、上方放不下標籤（字高約 35 px）時改畫在框內
+        ty = b.y1 - 8 if b.y1 >= 50 else b.y1 + 42
+        text = f"door {b.label} {b.score:.2f}"
+        tx = fit_text_x(frame, text, b.x1 + 3, UI_FONT_SCALE, UI_THICKNESS)
+        put_text_outlined(frame, text, (tx, ty), UI_FONT_SCALE, color, UI_THICKNESS)

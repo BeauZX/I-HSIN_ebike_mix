@@ -3,7 +3,6 @@
 import cv2
 import numpy as np
 
-from ..draw import put_text_outlined
 
 # 類別索引 → 顏色（BGR）。asphalt 模型的類別順序是字母序：
 #   0: dry_asphalt_severe → 紅、1: dry_asphalt_slight → 黃、2: dry_asphalt_smooth → 綠
@@ -43,7 +42,7 @@ def draw_grid_overlay(frame: np.ndarray, grid: list[list[tuple]], rows: int, col
     overlay = frame.copy()
 
     for r, row in enumerate(grid):
-        for c, (class_id, class_name, conf) in enumerate(row):
+        for c, (class_id, _, _) in enumerate(row):
             y1, y2 = r * cell_h, (r + 1) * cell_h
             x1, x2 = c * cell_w, (c + 1) * cell_w
             color = COLORS[class_id % len(COLORS)]
@@ -54,15 +53,7 @@ def draw_grid_overlay(frame: np.ndarray, grid: list[list[tuple]], rows: int, col
             # Border
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-            # Label
-            label = f"{class_name} {conf:.2f}"
-            font_scale = max(0.3, min(cell_w, cell_h) / 600)
-            thickness = 1
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-            tx = x1 + (cell_w - tw) // 2
-            ty = y1 + (cell_h + th) // 2
-            # OpenCV 5 的字距隨 thickness 變，粗黑細白的描邊會錯開，改用偏移描邊（見 src/draw.py）
-            put_text_outlined(frame, label, (tx, ty), font_scale, thickness=thickness)
+            # 格子裡不寫字（2026-09-26 使用者要求拿掉），顏色本身就代表等級
 
     # Blend fill
     cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
