@@ -170,6 +170,8 @@ print("情境 1：全新開機（沒有存檔）應該假設在全緊 (pos_tight
 print("=" * 70)
 motor = MotorController(cfg)
 check("開機初始位置 = pos_tight", motor._get_position() == cfg.pos_tight, f"實際={motor._get_position()}")
+check("開機時依位置標出檔位（畫面一啟動就能顯示 TIGHT）", motor.latest().target == "tight",
+      f"target={motor.latest().target}")
 motor.start()
 
 print()
@@ -205,7 +207,17 @@ motor.move_to("loose")
 time.sleep(0.01)   # 給執行緒一點時間真的進入忙碌狀態
 accepted = motor.move_to("mid")
 check("忙碌中第二個命令被拒絕", accepted is False, f"move_to() 回傳={accepted}")
+time.sleep(0.03)
+s1 = motor.latest()
+time.sleep(0.03)
+s2 = motor.latest()
+check("移動中 latest() 標出 busy 與要去的檔位（畫面顯示 TIGHT -> LOOSE）",
+      s1.busy and s1.moving_to == "loose" and s1.target == "tight", f"狀態={s1}")
+check("移動中 latest() 的 pulse 是即時的（兩次讀到的值不同）", s2.position_pulses < s1.position_pulses,
+      f"{s1.position_pulses} -> {s2.position_pulses}")
+check("latest() 回傳副本，改它不會影響內部狀態", s1 is not motor._status)
 wait_idle()
+check("移動結束後 moving_to 清掉", motor.latest().moving_to is None, f"狀態={motor.latest()}")
 st = motor.latest()
 check("全鬆一律轉到堵轉才停（停止原因 stall）", st.last_stop_reason == "stall", f"實際={st.last_stop_reason}")
 check("全鬆停在死點、位置 = pos_loose", st.position_pulses == cfg.pos_loose and sim.real == sim.loose_end,

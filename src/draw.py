@@ -11,6 +11,10 @@ import numpy as np
 
 _OFFSETS = ((-1, 0), (1, 0), (0, -1), (0, 1))
 
+# 畫面頂端留給左上角狀態區（main.py 的 ROAD / GRADING / DOOR / SUSPENSION 四行）的高度；
+# 警戒區標籤、警報橫幅（src/detect.py）要避開這一塊
+STATUS_TOP_RESERVED = 180
+
 
 def put_text_outlined(img: np.ndarray, text: str, org: tuple[int, int], font_scale: float,
                       color=(255, 255, 255), thickness: int = 1, outline=(0, 0, 0),

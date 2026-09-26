@@ -21,6 +21,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from .draw import STATUS_TOP_RESERVED
 from .hailo import HailoModel
 from .roi import select_rect
 from .settings import DetectSettings
@@ -407,7 +408,10 @@ class OverlayRenderer:
         cv2.rectangle(overlay, (rx1, ry1), (rx2, ry2), zone_color, -1)
         cv2.addWeighted(overlay, 0.12, frame, 0.88, 0, frame)
         cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), zone_color, 3)
-        cv2.putText(frame, "WARNING ZONE", (rx1 + 8, max(25, ry1 - 10)),
+        # 標籤畫在警戒區上方；上方空間不夠時（會壓到左上角的狀態區，
+        # 見 src/draw.py 的 STATUS_TOP_RESERVED）改畫在警戒區內側左下角
+        label_y = ry1 - 10 if ry1 - 10 >= STATUS_TOP_RESERVED else ry2 - 12
+        cv2.putText(frame, "WARNING ZONE", (rx1 + 8, label_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, zone_color, 2)
         if result is None:
             return
@@ -437,7 +441,8 @@ class OverlayRenderer:
         msg = "ALERT: OBJECT IN WARNING ZONE"      # OpenCV 內建字型不支援中文
         font, font_scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2
         (tw, th), _ = cv2.getTextSize(msg, font, font_scale, thickness)
-        x, y, pad = w // 2 - tw // 2, 100, 12
+        x, pad = w // 2 - tw // 2, 12
+        y = STATUS_TOP_RESERVED + th + pad + 20      # 橫幅放在左上角狀態區下方，不重疊
         cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + pad), (255, 255, 255), -1)
         cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + pad), (0, 0, 255), 2)
         cv2.putText(frame, msg, (x, y), font, font_scale, (0, 0, 200), thickness)

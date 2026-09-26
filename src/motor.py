@@ -33,7 +33,7 @@ import json
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import lgpio
@@ -45,11 +45,12 @@ TARGETS = ("tight", "mid", "loose")
 
 @dataclass
 class MotorStatus:
-    position_pulses: int
-    target: str | None          # 這次（或上一次）執行的目標名稱
+    position_pulses: int        # latest() 回傳的是即時計數（移動中也會一直變）
+    target: str | None          # 上一次完成的移動的目標名稱（開機時依讀回的位置判斷，不在任何檔位上就是 None）
     busy: bool
     last_stop_reason: str | None  # "target" / "stall" / "stall_start" / "timeout" / "already_close" / "aborted"
     diff_from_target: int | None  # 停止時跟目標差多少 pulse，診斷用（沿用 Arduino 版加的那行 log）
+    moving_to: str | None = None  # 移動中要去的目標名稱，沒在移動時是 None
 
 
 class MotorController(threading.Thread):
@@ -81,7 +82,7 @@ class MotorController(threading.Thread):
         self._new_cmd = threading.Event()
         self._stop_evt = threading.Event()      # 不能取名 _stop：會蓋掉 Thread 內部方法
 
-        self._status = MotorStatus(self._pulse_position, None, False, None, None)
+        self._status = MotorStatus(self._pulse_position, self._name_of(self._pulse_position), False, None, None)
         self._status_lock = threading.Lock()
 
     # ── 對外介面（main.py 用，跟其他背景緒的 submit()/latest() 精神一致） ──
@@ -96,14 +97,17 @@ class MotorController(threading.Thread):
             # 在這裡（而不是等 _execute_move() 真正開始跑）就標記忙碌，
             # 避免命令排進佇列但背景執行緒還沒醒來處理前，被下一次 move_to() 呼叫覆寫掉
             self._status.busy = True
+            self._status.moving_to = target
         with self._cmd_lock:
             self._pending = target
         self._new_cmd.set()
         return True
 
     def latest(self) -> MotorStatus | None:
+        """回傳副本（主迴圈拿去畫圖時不會讀到改到一半的狀態），position_pulses 換成即時計數。"""
+        position = self._get_position()
         with self._status_lock:
-            return self._status
+            return replace(self._status, position_pulses=position)
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -194,8 +198,16 @@ class MotorController(threading.Thread):
                 self._motor_coast()
                 with self._status_lock:
                     self._status.busy = False
+                    self._status.moving_to = None
 
     # ── 移動邏輯（對應 moveToPosition()） ──
+
+    def _name_of(self, position: int) -> str | None:
+        """位置在某個檔位的 position_tolerance 內就回傳檔位名稱，否則 None。"""
+        for name in TARGETS:
+            if abs(position - self._target_pulses(name)) <= self.cfg.position_tolerance:
+                return name
+        return None
 
     def _target_pulses(self, target: str) -> int:
         return {"tight": self.cfg.pos_tight, "mid": self.cfg.pos_mid, "loose": self.cfg.pos_loose}[target]

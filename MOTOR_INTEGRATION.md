@@ -35,7 +35,8 @@
 |---|---|
 | `src/settings.py` | 加 `MotorSettings` dataclass（21 個欄位）、加進 `Settings`、`load_settings()` 讀 `motor.yaml` 並驗證（腳位不重複、位置範圍、比例值 > 0 等） |
 | `pyproject.toml` | 註解說明 `lgpio` 走系統套件 `python3-lgpio`（PyPI 版只有原始碼、缺 swig 編不起來，不列進 `dependencies`） |
-| `main.py` | import 馬達相關模組；建立並啟動 `motor` 執行緒；主迴圈每幀呼叫 `decide_target()` → `TargetDebouncer` → 冷卻時間檢查 → `move_to()`；狀態列加馬達顯示；收尾流程加 `motor.stop()`/`join()`/`close()`；確認的新目標遇到馬達忙碌時，「命令被略過」同一個目標只印一次（USB 版每幀都印，20 fps 下每秒 20 行） |
+| `main.py` | import 馬達相關模組；建立並啟動 `motor` 執行緒；主迴圈每幀呼叫 `decide_target()` → `TargetDebouncer` → 冷卻時間檢查 → `move_to()`；左上角狀態區改成給報告投影用：一項一行 `ROAD: Concrete road (98%)` / `GRADING: cement grid+crack` / `DOOR: CLOSED`（沒偵測到車門顯示 `NOT DETECTED`）/ `SUSPENSION: Half-Lock`（字級 1.0、粗細 2；檔位顯示名稱 tight / mid / loose = `Lock` / `Half-Lock` / `Unlock`，log 與設定檔仍用英文代號），FPS 小字放右上角；分析緒次數與耗時這些除錯數字不上畫面，改看 metrics / log。避震器切換中黃字 `SUSPENSION: Half-Lock -> Unlock  (-143)`（即時 pulse，跟 log 對得上；沒到位時標出停止原因）；收尾流程加 `motor.stop()`/`join()`/`close()`；確認的新目標遇到馬達忙碌時，「命令被略過」同一個目標只印一次（USB 版每幀都印，20 fps 下每秒 20 行） |
+| `src/detect.py` | `WARNING ZONE` 標籤在警戒區上方空間不夠時（會壓到左上角狀態區）改畫在警戒區內側左下角；ALERT 橫幅移到狀態區下方（留白高度統一定義在 `src/draw.py` 的 `STATUS_TOP_RESERVED`） |
 | `src/event_log.py` | `FIELDS` 加 `"motor"`，`snapshot()` 多吃一個 `motor_status` 參數，記錄目標位置名稱（tight/mid/loose） |
 | `README.md` | 加「避震器馬達控制」章節（決策規則、防抖動、位置持久化、時間精度提醒、已知訊號落差）；模組表、config 表、log 欄位表、`presets/` 說明都補上馬達相關項目 |
 
@@ -128,13 +129,14 @@ Arduino 版只有全緊端確認過是機構死點，所以只在全緊歸零，
 
 ## 測試狀態
 
-### ✅ 已用模擬驗證（`tests/simulate_motor.py`，23 項全過）
+### ✅ 已用模擬驗證（`tests/simulate_motor.py`，28 項全過）
 模擬馬達有自己的真實位置與兩端死點，跟程式算的位置分開，才能模擬計數漂移。
 - 開機讀回/預設位置
 - 中間位置正常移動到位（含 tolerance 判斷）
 - 兩端堵轉 + 動態歸零（計數往兩個方向漂移 5 格，都會頂到死點後校正回 `pos_tight` / `pos_loose`）
 - 鎖不緊的回歸測試：計數到 0 時實際還差 5 格，仍要轉到頂住全緊（USB 舊版停在實際 -11）
 - 忙碌中命令正確被拒絕（驗證了上面那個 bug 修正）
+- 畫面用的即時狀態：開機依位置標出檔位、移動中 `latest()` 回傳即時 pulse 與 `moving_to`、回傳副本、結束後清掉 `moving_to`
 - 回呼成批送達時不漏算脈衝（舊版回呼時間濾波在這個情境送出 90 只算到 18）
 - 位置持久化（存檔 → 重新建立 controller → 讀回）
 - `decide_target()` 四條規則的覆蓋順序

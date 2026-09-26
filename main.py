@@ -43,21 +43,49 @@ from src.draw import put_text_outlined
 from src.settings import SettingsError, load_settings
 
 
-def _draw_status(frame, fps_shown, road, det, door, rr, dr, ms) -> None:
-    """左上角疊一行狀態：實際幀率、路面種類與分級模式、車門狀態、三條分析緒的次數與耗時、馬達狀態。"""
-    if rr is None:
-        road_txt = "road: ..."
-    else:
-        mode = {"asphalt": "asphalt grid", "cement": "cement grid+crack", "none": "no grading"}[rr.mode]
-        road_txt = f"{rr.label} {rr.confidence:.2f} -> {mode}"
-    door_txt = "door: ..." if dr is None else f"door: {dr.state.upper()}"
-    motor_txt = "motor: ..." if ms is None else (
-        f"motor: {'MOVING' if ms.busy else (ms.target or '?').upper()} pulse={ms.position_pulses}")
-    text = (f"{fps_shown:4.1f} fps | {road_txt} #{road.update_count} ({road.last_ms:.0f} ms)"
-            f" | det #{det.update_count} ({det.last_ms:.0f} ms)"
-            f" | {door_txt} #{door.update_count} ({door.last_ms:.0f} ms)"
-            f" | {motor_txt}")
-    put_text_outlined(frame, text, (10, 24), 0.6)
+# 左上角狀態區：一項一行（報告投影用，比其他標籤大；分析緒的次數與耗時不上畫面，看 metrics / log）
+_HUD_SCALE, _HUD_THICKNESS = 1.0, 2
+_HUD_X, _HUD_Y0, _HUD_LINE_H = 10, 36, 42   # 最後一行的底要在 src/draw.py 的 STATUS_TOP_RESERVED 之內
+_FPS_SCALE = 0.7                            # FPS 是系統資訊，小字放右上角
+_WHITE, _YELLOW = (255, 255, 255), (0, 215, 255)
+_GRADING_TEXT = {"asphalt": "asphalt grid", "cement": "cement grid+crack", "none": "none"}
+# 畫面上的顯示名稱（程式內部、log、設定檔仍用原本的代號）
+_SUSPENSION_TEXT = {"tight": "Lock", "mid": "Half-Lock", "loose": "Unlock"}
+_DOOR_TEXT = {"open": "OPEN", "closed": "CLOSED", "none": "NOT DETECTED"}
+
+# 沒有到達目標的停止原因：畫面上照實標出來，不顯示成已經到位（mid 沒有死點，stall 代表中途卡住）
+_MOTOR_NOT_REACHED = ("timeout", "stall_start", "aborted")
+
+
+def _suspension_line(ms) -> tuple[str, tuple]:
+    """避震器狀態只用真實數值：停著顯示目前檔位，切換中（黃字）顯示
+    「從哪一檔 -> 到哪一檔」加即時 pulse（跟終端機 log 對得上）。"""
+    if ms is None:
+        return "SUSPENSION: ...", _WHITE
+    current = _SUSPENSION_TEXT.get(ms.target, "--")
+    if ms.busy and ms.moving_to:
+        return f"SUSPENSION: {current} -> {_SUSPENSION_TEXT[ms.moving_to]}  ({ms.position_pulses})", _YELLOW
+    text = f"SUSPENSION: {current}"
+    reason = ms.last_stop_reason
+    if reason in _MOTOR_NOT_REACHED or (reason == "stall" and ms.target == "mid"):
+        text += f"  ({reason})"
+    return text, _WHITE
+
+
+def _draw_status(frame, fps_shown, rr, dr, ms) -> None:
+    """左上角一項一行：路面種類與信心、分級模式、車門、避震器；FPS 小字放右上角。"""
+    lines = [
+        ("ROAD: ..." if rr is None else f"ROAD: {rr.label} ({rr.confidence:.0%})", _WHITE),
+        ("GRADING: ..." if rr is None else f"GRADING: {_GRADING_TEXT[rr.mode]}", _WHITE),
+        ("DOOR: ..." if dr is None else f"DOOR: {_DOOR_TEXT[dr.state]}", _WHITE),
+        _suspension_line(ms),
+    ]
+    for i, (text, color) in enumerate(lines):
+        put_text_outlined(frame, text, (_HUD_X, _HUD_Y0 + i * _HUD_LINE_H), _HUD_SCALE, color, _HUD_THICKNESS)
+
+    fps_text = f"{fps_shown:.1f} FPS"
+    (tw, _), _ = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, _FPS_SCALE, _HUD_THICKNESS)
+    put_text_outlined(frame, fps_text, (frame.shape[1] - tw - 10, 30), _FPS_SCALE, _WHITE, _HUD_THICKNESS)
 
 
 def main() -> None:
@@ -281,7 +309,7 @@ def main() -> None:
             if now - last_t >= 1.0:
                 fps_shown = (frame_idx - last_n) / (now - last_t)
                 last_t, last_n = now, frame_idx
-            _draw_status(frame, fps_shown, road, det, door, rr, dr, ms)
+            _draw_status(frame, fps_shown, rr, dr, ms)
             t_write = time.perf_counter()
 
             if recorder:
